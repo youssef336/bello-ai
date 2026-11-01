@@ -12,6 +12,7 @@ import type { User } from './auth';
 import { type Env, newId, now, today } from './env';
 import { keysFor } from './keys';
 import { classifyTask, detectLanguage } from './lang';
+import { refund } from './limits';
 import { estimateCost, paidAllowedNow } from './paid';
 import { callProvider, providerById } from './providers';
 import { cooldownMs, type ModelRow, rankModels, type RouteRequest } from './router';
@@ -438,6 +439,7 @@ async function answer(env: Env, ctx: ExecutionContext, user: User, input: ChatIn
   const run = async () => {
     await send('conversation', { id: job.conversationId, userMessageId: job.userMessageId });
     if (!attempts.length) {
+      await refund(env, user, 'messages');
       await send('error', { message: noModelsMessage(p) });
       await close();
       return;
@@ -474,6 +476,8 @@ async function answer(env: Env, ctx: ExecutionContext, user: User, input: ChatIn
       await close();
       return;
     }
+    // Nothing answered: the message does not count against today's limit.
+    await refund(env, user, 'messages');
     await send('error', { message: 'All free models failed for this message. Try again shortly.' });
     await close();
   };
@@ -524,19 +528,22 @@ async function compare(env: Env, ctx: ExecutionContext, user: User, job: Job): P
       if (!o.ok) continue;
       await recordSuccess(env, user, model, o, false, p.promptChars);
       await send('slot-done', { slot: n, broken: o.broken });
-      return;
+      return true;
     }
     await send('slot-error', { slot: n, message: 'مفيش موديل تاني فاضي دلوقتي.' });
+    return false;
   };
 
   const run = async () => {
     await send('conversation', { id: job.conversationId, userMessageId: job.userMessageId, slots: own.length });
     if (!own.length) {
+      await refund(env, user, 'messages');
       await send('error', { message: noModelsMessage(p) });
       await close();
       return;
     }
-    await Promise.all(own.map((m, n) => slot(n, m)));
+    const answered = await Promise.all(own.map((m, n) => slot(n, m)));
+    if (!answered.some(Boolean)) await refund(env, user, 'messages');
     await sendTitle();
     await send('done', {});
     await close();

@@ -34,12 +34,30 @@ hits its limit, and **adds new free models by itself** as soon as a provider pub
   (Gemini's Google Search grounding is no longer free on current models.)
 - **Compare** (⚖️): three different models answer side by side; the one you keep is saved and earns
   the model a point.
+- **Draw and edit pictures** (🎨): describe a picture, or attach up to 4 and say what to change
+  ("خلّي الخلفية بحر", "put the dog from image 1 next to her"). Runs on Cloudflare Workers AI's free
+  allocation: FLUX.2 [klein] draws and edits (≈ 130 neurons a picture), FLUX.1 [schnell] is the
+  backup. Arabic requests are rewritten as an English prompt by a fast free model first. Every
+  drawn picture has **download** and **edit this** under it, so edits can go round after round.
+  A message that starts with "ارسم…" / "draw…" draws by itself.
+- **Video** (الفيديو): trim, reframe (9:16 · 1:1 · 16:9), resize and mute on the device with
+  [Mediabunny](https://mediabunny.dev) (WebCodecs, nothing is uploaded); **AI subtitles** with
+  Whisper large-v3-turbo on Workers AI (≈ 47 neurons a minute) that you can correct before they
+  are burnt in, or download as `.srt`; grab a frame and send it to the picture editor.
+  *Text-to-video is not here:* as of 2026-11 every video model with an API (Veo, Kling, Seedance,
+  Wan, Grok Imagine…) is paid, on Pollinations, Workers AI and Gemini alike.
+- **Daily limits, like Claude and ChatGPT**: messages, pictures and minutes of subtitles per
+  person per day, with a usage meter in the menu, a warning when 5 are left and the reset time
+  (00:00 UTC, when Cloudflare refills its free allocation). Defaults in
+  [`config/limits.ts`](config/limits.ts); the owner changes anyone's from **الأعضاء → الحدود**.
+  A message nothing answered, or a picture that failed, does not count.
 - **Auto titles**: a fast model names each new conversation while the answer streams.
 - **Memory**: notes about you; pinned ones always go in, the rest only when they match the message.
 - **Friends, without sharing your limits**: invite emails; they sign in with Google and add their
   own free keys (a guided page, ~2 minutes). Keys are AES-256-GCM encrypted, bound to the user and
   provider. Each person has their own chats, memory, usage and rate-limit rests; Workers AI and paid
-  models stay the owner's. Removing a member deletes all their data.
+  models stay the owner's (pictures and subtitles use the owner's Workers AI, which is why members
+  get small daily picture and video limits). Removing a member deletes all their data.
 - **Picks by measured skill**: every model sits a 9-question exam (code, reasoning, Egyptian
   Arabic + MSA; one hard question each). The router ranks by the score for the kind of message,
   then reliability and speed. Re-taken monthly; new models take it within hours.
@@ -137,6 +155,7 @@ Then **الأعضاء → ادعي** an email; that person opens the site and si
 | CPU per request | 10 ms | fine: the Worker mostly waits on the network |
 | Subrequests | 50 / invocation | ≤ 12 model tests per scan, ≤ 4 tries per message |
 | Cron triggers | 5 / account | uses 1 |
+| Workers AI | 10,000 neurons / day | ≈ 75 pictures, or ≈ 200 minutes of subtitles, shared by everyone; then it fails until 00:00 UTC, never bills |
 | D1 | 5 GB, 5M rows read and 100k written / day | years of chat history |
 
 Checked against developers.cloudflare.com on 2026-11-01. Free plans change; re-check now and then.
@@ -170,3 +189,7 @@ Your data (history, memory) stays in **your** D1 database; back it up with **ت�
 - [ ] Weekly benchmark on your own prompts to replace the name-based quality guess
 - [ ] Optional local models (Ollama) through Cloudflare Tunnel
 - [x] Parallel "ask 3 models and compare" mode
+- [x] Draw and edit pictures (Workers AI FLUX)
+- [x] Video: trim, reframe, AI subtitles
+- [x] Daily limits per person
+- [ ] Text-to-video, the day a provider offers it free

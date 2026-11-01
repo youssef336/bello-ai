@@ -1,6 +1,6 @@
 const $ = (id) => document.getElementById(id);
 
-const state = { conversationId: null, controller: null, web: false, compare: false, keepCompared: null };
+const state = { conversationId: null, controller: null, web: false, compare: false, draw: false, keepCompared: null };
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -12,8 +12,25 @@ async function api(path, options = {}) {
     throw new Error('login required');
   }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  if (!res.ok) throw new Error(errorText(data, res.status));
   return data;
+}
+
+/** Local clock time, e.g. "2:00 ص". */
+const clock = (ms) => new Date(ms).toLocaleTimeString('ar-EG-u-nu-latn', { hour: 'numeric', minute: '2-digit' });
+
+/** "بعد 3 ساعات" / "بعد 20 دقيقة" until a moment. */
+function untilText(ms) {
+  const min = Math.max(1, Math.round((ms - Date.now()) / 60_000));
+  if (min < 60) return `بعد ${min} دقيقة`;
+  const h = Math.round(min / 60);
+  return h === 1 ? 'بعد ساعة' : h === 2 ? 'بعد ساعتين' : `بعد ${h} ساعات`;
+}
+
+/** A server error as text; a daily limit also says when it comes back, like Claude and ChatGPT do. */
+function errorText(data, status) {
+  const base = data?.error || `HTTP ${status}`;
+  return data?.resetAt ? `${base} بيتجدد الساعة ${clock(data.resetAt)} (${untilText(data.resetAt)}).` : base;
 }
 
 function el(tag, attrs = {}, ...children) {
@@ -195,6 +212,8 @@ const isOwner = () => session.me?.role === 'owner';
 function renderMe() {
   const me = session.me;
   for (const n of document.querySelectorAll('[data-owner]')) n.hidden = !isOwner();
+  // Pictures and video subtitles need the owner's Workers AI.
+  for (const n of document.querySelectorAll('[data-media]')) n.hidden = !me.media;
   const name = me.name || me.email || 'أنا';
   $('me').replaceChildren(
     me.picture
@@ -215,7 +234,7 @@ async function showApp(me) {
   $('login').hidden = true;
   $('app').hidden = false;
   renderMe();
-  await Promise.all([loadConversations(), loadModelPicker()]);
+  await Promise.all([loadConversations(), loadModelPicker(), loadQuota()]);
   if (!matchMedia('(pointer: coarse)').matches) $('input').focus();
 }
 
@@ -246,8 +265,8 @@ $('logout').addEventListener('click', async () => {
 
 // --- Navigation ----------------------------------------------------------------------------
 
-const views = { chat: null, models: loadModels, memory: loadMemories, activity: loadActivity, keys: loadKeys, members: loadMembers, settings: loadSettings };
-const TITLES = { models: 'الموديلات', memory: 'الذاكرة', activity: 'النشاط', keys: 'مفاتيحي', members: 'الأعضاء', settings: 'المظهر' };
+const views = { chat: null, video: loadVideo, models: loadModels, memory: loadMemories, activity: loadActivity, keys: loadKeys, members: loadMembers, settings: loadSettings };
+const TITLES = { video: 'الفيديو', models: 'الموديلات', memory: 'الذاكرة', activity: 'النشاط', keys: 'مفاتيحي', members: 'الأعضاء', settings: 'المظهر' };
 
 function closeSidebar() {
   $('sidebar').classList.remove('open');
@@ -348,12 +367,14 @@ async function openConversation(id, title) {
   $('empty').hidden = true;
   $('messages').replaceChildren($('empty'), ...messages.map((m) => messageNode(m)));
   scrollDown(true);
+  scrollWhenLoaded($('messages'));
   loadConversations();
 }
 
 for (const chip of document.querySelectorAll('.chip')) {
   chip.addEventListener('click', () => {
     $('input').value = chip.dataset.prompt.replace(/\\n/g, '\n');
+    if ('draw' in chip.dataset) setDraw(true);
     autosize();
     $('input').focus();
   });
@@ -382,10 +403,12 @@ function messageActions(m) {
       class: 'icon-btn', title: 'شارك', onclick: () => navigator.share({ text: m.content }).catch(() => {}),
     }, icon('share')));
   }
+  // A drawn picture is not re-asked through chat.
+  const drawn = list(m.attachments).length > 0;
   return [
     ...extras,
     // CSS shows this only on the last answer.
-    el('button', { class: 'icon-btn regen', title: 'رد تاني', onclick: () => send('', { regenerate: true }) }, icon('redo')),
+    drawn ? null : el('button', { class: 'icon-btn regen', title: 'رد تاني', onclick: () => send('', { regenerate: true }) }, icon('redo')),
     copyBtn,
     el('button', { class: `icon-btn vote ${m.feedback === 1 ? 'on' : ''}`, title: 'رد حلو', onclick: (e) => vote(1, e.currentTarget) }, icon('up')),
     el('button', { class: `icon-btn vote ${m.feedback === -1 ? 'on' : ''}`, title: 'رد وحش', onclick: (e) => vote(-1, e.currentTarget) }, icon('down')),
@@ -414,6 +437,30 @@ function attachmentsNode(atts) {
   return el('div', { class: 'msg-atts' }, ...atts.map((a) => (a.type === 'image'
     ? el('img', { src: a.data, alt: a.name, title: a.name, onclick: () => viewImage(a.data) })
     : el('span', { class: 'file-chip', title: a.name }, '📄', el('span', { dir: 'auto' }, a.name)))));
+}
+
+/** Pictures Bello drew: big, with download and "edit this" under each. */
+function drawnNode(atts) {
+  const pictures = atts.filter((a) => a.type === 'image');
+  if (!pictures.length) return null;
+  return el('div', { class: 'drawn' }, ...pictures.map((a) => el('figure', {},
+    el('img', { src: a.data, alt: a.name, onclick: () => viewImage(a.data) }),
+    el('figcaption', {},
+      el('a', { class: 'btn-ghost', href: a.data, download: a.name }, '⬇️ نزّلها'),
+      el('button', { type: 'button', class: 'btn-ghost', onclick: () => editPicture(a.data, a.name) }, '✏️ عدّلها'),
+    ),
+  )));
+}
+
+/** Put a picture in the tray with drawing on, so the next message edits it. */
+function editPicture(data, name = 'صورة') {
+  if (count('image') >= MAX_IMAGES) return notify(`أقصى حاجة ${MAX_IMAGES} صور`);
+  pending.push({ type: 'image', name, data });
+  renderTray();
+  setDraw(true);
+  showView('chat');
+  $('input').placeholder = 'اكتب التعديل: مثلاً خلّي الخلفية بحر، أو شيل الشخص اللي ورا';
+  $('input').focus();
 }
 
 function sourcesNode(sources) {
@@ -446,9 +493,11 @@ function messageNode(m) {
       m.content ? el('div', { class: 'body' }, m.content) : null,
     ));
   }
+  const parts = answerParts(m);
+  parts.splice(2, 0, drawnNode(list(m.attachments)));
   return el('div', { class: 'msg assistant' },
     el('img', { src: '/icon.svg', alt: '', class: 'avatar' }),
-    el('div', { class: 'bubble' }, ...answerParts(m)),
+    el('div', { class: 'bubble' }, ...parts),
   );
 }
 
@@ -470,6 +519,12 @@ function scrollDown(force = false) {
   const box = $('messages');
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 160;
   if (force || nearBottom) box.scrollTop = box.scrollHeight;
+}
+
+/** Pictures grow the page as they load: scroll again once they have. */
+function scrollWhenLoaded(node) {
+  const pending = [...node.querySelectorAll('img')].filter((img) => !img.complete);
+  if (pending.length) Promise.allSettled(pending.map((img) => img.decode())).then(() => scrollDown(true));
 }
 
 // --- Attachments ---------------------------------------------------------------------------
@@ -498,9 +553,9 @@ function renderTray() {
 }
 
 /** Pictures go up as JPEG, at most 1280 px on the long side: small enough for every provider. */
-async function shrinkImage(source) {
+async function shrinkImage(source, max = 1280) {
   const bmp = await createImageBitmap(source);
-  const scale = Math.min(1, 1280 / Math.max(bmp.width, bmp.height));
+  const scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
   const canvas = el('canvas', { width: Math.round(bmp.width * scale), height: Math.round(bmp.height * scale) });
   const g = canvas.getContext('2d');
   g.fillStyle = '#fff';
@@ -513,6 +568,13 @@ async function shrinkImage(source) {
     url = canvas.toDataURL('image/jpeg', quality);
   }
   return url;
+}
+
+/** A data URL as an image element (fetching data: URLs is outside the page's CSP). */
+function loadImage(src) {
+  const img = new Image();
+  img.src = src;
+  return img.decode().then(() => img);
 }
 
 let pdfjs = null;
@@ -620,17 +682,33 @@ function toggle(id, on) {
   $(id).setAttribute('aria-pressed', String(on));
   state[id] = on;
 }
+/** Web search, compare and drawing are one mode at a time. */
+function only(id) {
+  for (const other of ['web', 'compare', 'draw']) if (other !== id) toggle(other, false);
+  $('draw-size-wrap').hidden = !state.draw;
+  // The chat model picker does nothing while drawing: CSS hides it there on phones.
+  $('composer').classList.toggle('drawing', state.draw);
+  if (!state.draw) $('input').placeholder = 'اكتب رسالتك…';
+  if (quota.data) renderQuota();
+}
+function setDraw(on) {
+  toggle('draw', on);
+  if (on) $('input').placeholder = count('image') ? 'اكتب التعديل اللي عايزه على الصورة' : 'وصف الصورة اللي عايزها';
+  only('draw');
+}
 $('web').addEventListener('click', () => {
-  const on = !state.web;
-  toggle('web', on);
-  if (on) toggle('compare', false);
-  notify(on ? '🌐 هيدوّر على النت قبل ما يرد' : 'البحث على النت اتقفل');
+  toggle('web', !state.web);
+  only('web');
+  notify(state.web ? '🌐 هيدوّر على النت قبل ما يرد' : 'البحث على النت اتقفل');
 });
 $('compare').addEventListener('click', () => {
-  const on = !state.compare;
-  toggle('compare', on);
-  if (on) toggle('web', false);
-  notify(on ? '⚖️ 3 موديلات هيردّوا وانت تختار' : 'المقارنة اتقفلت');
+  toggle('compare', !state.compare);
+  only('compare');
+  notify(state.compare ? '⚖️ 3 موديلات هيردّوا وانت تختار' : 'المقارنة اتقفلت');
+});
+$('draw').addEventListener('click', () => {
+  setDraw(!state.draw);
+  notify(state.draw ? '🎨 اكتب وصف الصورة — أو ارفع صورة واكتب التعديل' : 'الرسم اتقفل');
 });
 
 // --- Sending -------------------------------------------------------------------------------
@@ -672,6 +750,18 @@ $('composer').addEventListener('submit', (e) => {
   const text = $('input').value.trim();
   if ((!text && !pending.length) || state.controller) return;
   if (pending.some((a) => a.busy)) return notify('استنى الملفات تخلص قراية');
+  // "ارسم…" / "draw…" at the start of a message draws, like ChatGPT does.
+  const drawing = state.draw || (session.me?.media && !state.compare && !state.web && DRAW_REQUEST.test(text)
+    && !pending.some((a) => a.type === 'file'));
+  if (drawing) {
+    if (!text) return notify(count('image') ? 'اكتب التعديل اللي عايزه' : 'اكتب وصف الصورة');
+    if (pending.some((a) => a.type === 'file')) return notify('الرسم والتعديل بياخدوا صور بس، من غير ملفات');
+    const images = pending.splice(0);
+    renderTray();
+    $('input').value = '';
+    autosize();
+    return sendImage(text, images);
+  }
   const attachments = pending.splice(0).map(({ type, name, data, text: t }) => (type === 'image' ? { type, name, data } : { type, name, text: t }));
   renderTray();
   $('input').value = '';
@@ -697,7 +787,7 @@ async function stream(body, onEvent) {
     }
     if (!res.ok) {
       const data = await res.json().catch(() => null);
-      throw new Error(data?.error || `HTTP ${res.status}`);
+      throw new Error(errorText(data, res.status));
     }
     await readEvents(res.body, onEvent);
   } finally {
@@ -705,7 +795,104 @@ async function stream(body, onEvent) {
     $('send').hidden = false;
     $('stop').hidden = true;
     loadModelPicker();
+    loadQuota();
   }
+}
+
+// --- Pictures: draw or edit --------------------------------------------------------------
+
+const DRAW_REQUEST = /^\s*(ارسم|ارسملي|إرسم|اعمل(لي| لي)? صور[ةه]|اعمللي صور[ةه]|صمم(لي| لي)? صور[ةه]|ولّ?د صور[ةه]|(please )?(draw|paint)\b|(generate|create|make) (me )?an? (image|picture|photo|drawing))/i;
+/** FLUX takes input pictures under 512 px. */
+const EDIT_INPUT_PX = 511;
+
+async function sendImage(text, images) {
+  if (state.controller) return;
+  await state.keepCompared?.();
+  $('empty').hidden = true;
+  const inputs = await Promise.all(images.map(async (a) => shrinkImage(await loadImage(a.data), EDIT_INPUT_PX)));
+  const first = images.length ? await loadImage(inputs[0]) : null;
+  const aspect = first ? first.naturalWidth / first.naturalHeight : Number($('draw-size').value);
+  $('messages').append(messageNode({ role: 'user', content: text, attachments: inputs.map((data, i) => ({ type: 'image', name: images[i].name, data })) }));
+  const answer = { role: 'assistant', content: '', notice: images.length ? 'بعدّل الصورة… (حوالي 10 ثواني)' : 'برسم الصورة… (حوالي 10 ثواني)' };
+  const node = messageNode(answer);
+  $('messages').append(node);
+  scrollDown(true);
+
+  state.controller = new AbortController();
+  $('send').hidden = true;
+  $('stop').hidden = false;
+  try {
+    const out = await api('/api/images', {
+      method: 'POST',
+      body: JSON.stringify({ prompt: text, images: inputs, aspect, conversationId: state.conversationId }),
+      signal: state.controller.signal,
+    });
+    conversationEvent('conversation', { id: out.conversationId }, `🎨 ${text}`);
+    const done = messageNode(out.message);
+    node.replaceWith(done);
+    scrollDown(true);
+    scrollWhenLoaded(done);
+    navigator.vibrate?.(12);
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      node.remove();
+    } else {
+      answer.notice = null;
+      answer.content = `⚠️ ${err.message}`;
+      fillAnswer(node, answer);
+    }
+  } finally {
+    state.controller = null;
+    $('send').hidden = false;
+    $('stop').hidden = true;
+    // The tray is empty again: the hint goes back to describing a new picture.
+    if (state.draw) setDraw(true);
+    loadQuota();
+  }
+}
+
+// --- Daily limits ------------------------------------------------------------------------
+
+const quota = { data: null };
+const KIND_NAMES = { messages: 'رسايل', images: 'صور', video: 'دقايق فيديو' };
+
+async function loadQuota() {
+  try {
+    quota.data = await api('/api/limits');
+    renderQuota();
+  } catch {
+    // The meter is a nicety; the server enforces the limits anyway.
+  }
+}
+
+/** Sidebar meter (like Claude's usage bars) and a line over the composer when little is left. */
+function renderQuota() {
+  const { kinds, resetAt } = quota.data;
+  const shown = kinds.filter((k) => k.limit !== null && (k.kind === 'messages' || session.me?.media));
+  $('quota').hidden = !shown.length;
+  $('quota').replaceChildren(
+    el('div', { class: 'quota-head' }, el('b', {}, 'استخدامك النهارده'), el('span', { class: 'muted small' }, `بيتجدد ${clock(resetAt)}`)),
+    ...shown.map((k) => {
+      const share = k.limit ? Math.min(100, (k.used / k.limit) * 100) : 100;
+      const tone = k.used >= k.limit ? 'out' : share >= 80 ? 'low' : '';
+      return el('div', { class: `quota-row ${tone}` },
+        el('span', {}, KIND_NAMES[k.kind]),
+        el('span', { class: 'muted small' }, `${k.used} / ${k.limit}`),
+        el('div', { class: 'quota-bar' }, el('i', { 'data-p': share })),
+      );
+    }),
+  );
+  // CSP forbids inline style attributes, so widths are set through the CSSOM.
+  for (const bar of $('quota').querySelectorAll('.quota-bar i')) bar.style.width = `${bar.dataset.p}%`;
+
+  const k = kinds.find((x) => x.kind === (state.draw ? 'images' : 'messages'));
+  const left = k.limit === null ? Infinity : k.limit - k.used;
+  const what = KIND_NAMES[k.kind];
+  $('quota-note').hidden = left > 5;
+  $('quota-note').classList.toggle('out', left <= 0);
+  $('quota-note').textContent = left <= 0
+    ? `⏳ خلّصت ${what} النهارده — بيتجدد الساعة ${clock(resetAt)} (${untilText(resetAt)})`
+    : `فاضل لك ${left} ${what} النهارده`;
 }
 
 /** Shared by both modes: a new conversation's id and, later, its generated title. */
@@ -1215,7 +1402,7 @@ function avatar(u) {
 async function loadMembers() {
   const data = await api('/api/members');
   $('google-warning').hidden = data.googleReady;
-  const userRow = (u) => el('li', {},
+  const userRow = (u) => el('li', { class: 'member-row' },
     el('span', { class: 'member' }, avatar(u),
       el('span', { class: 'me-text' },
         el('b', { dir: 'auto' }, u.name || u.email || 'المالك'),
@@ -1224,6 +1411,7 @@ async function loadMembers() {
     ),
     el('span', { class: 'row' },
       el('span', { class: 'badge' }, `${u.messages_30d} رسالة/شهر`),
+      el('button', { class: 'btn-ghost small-btn', onclick: (e) => toggleLimits(e.currentTarget.closest('li'), u) }, '⏳ الحدود'),
       el('span', { class: `badge ${u.keys ? 'ok' : 'warn'}` }, u.keys ? `${u.keys} مفتاح` : 'من غير مفاتيح'),
       u.last_seen ? el('span', { class: 'muted small' }, ago(u.last_seen)) : null,
       u.role === 'owner' ? el('span', { class: 'badge ok' }, 'المالك') : el('button', {
@@ -1249,6 +1437,54 @@ async function loadMembers() {
   $('members-list').replaceChildren(...data.users.map(userRow), ...data.invites.map(inviteRow));
 }
 
+const LIMIT_KINDS = [['messages', 'رسايل'], ['images', 'صور'], ['video', 'دقايق فيديو']];
+/** '' = default, ∞ = no limit, otherwise a whole number. */
+const limitValue = (text) => {
+  const t = text.trim();
+  if (!t) return null;
+  if (/^(∞|-1?|مفتوح)$/.test(t)) return -1;
+  return /^\d+$/.test(t) ? Number(t) : NaN;
+};
+
+/** Under a member: today's use and their own limits (empty = the default in config/limits.ts). */
+function toggleLimits(row, u) {
+  const open = row.nextElementSibling?.classList.contains('limits-row');
+  if (open) return row.nextElementSibling.remove();
+  const today = new Map(u.today.map((k) => [k.kind, k]));
+  const inputs = LIMIT_KINDS.map(([kind]) => {
+    const stored = u[`limit_${kind}`];
+    return el('input', {
+      type: 'text', inputmode: 'numeric', dir: 'ltr', 'aria-label': kind,
+      value: stored === null || stored === undefined ? '' : stored === -1 ? '∞' : String(stored),
+      placeholder: `افتراضي (${today.get(kind).limit ?? '∞'})`,
+    });
+  });
+  const save = el('button', {
+    class: 'btn-primary', onclick: async () => {
+      const values = inputs.map((i) => limitValue(i.value));
+      if (values.some((v) => Number.isNaN(v))) return notify('اكتب رقم، أو ∞ لمفتوح، أو سيبه فاضي للافتراضي');
+      try {
+        await api(`/api/members/${u.id}/limits`, {
+          method: 'PUT',
+          body: JSON.stringify(Object.fromEntries(LIMIT_KINDS.map(([kind], i) => [kind, values[i]]))),
+        });
+        notify('✓ اتحفظت الحدود');
+        await loadMembers();
+        if (u.id === session.me.id) loadQuota();
+      } catch (err) {
+        notify(err.message);
+      }
+    },
+  }, 'احفظ');
+  row.after(el('li', { class: 'limits-row' },
+    el('div', { class: 'limits-grid' }, ...LIMIT_KINDS.map(([kind, label], i) => {
+      const k = today.get(kind);
+      return el('label', {}, el('span', {}, label), inputs[i], el('span', { class: 'muted small' }, `النهارده ${k.used} / ${k.limit ?? '∞'}`));
+    })),
+    el('div', { class: 'row' }, save, el('span', { class: 'muted small' }, 'فاضي = الافتراضي · ∞ = مفتوح · 0 = مقفول')),
+  ));
+}
+
 $('invite-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
@@ -1260,6 +1496,14 @@ $('invite-form').addEventListener('submit', async (e) => {
     notify(err.message);
   }
 });
+
+// --- Video (public/video.js, loaded the first time the page opens) ----------------------------
+
+let videoPage = null;
+async function loadVideo() {
+  videoPage ??= await import('/video.js');
+  videoPage.mount($('video-app'), { el, api, notify, loadQuota, editPicture });
+}
 
 // --- Voice, read-aloud, quick actions -------------------------------------------------------
 

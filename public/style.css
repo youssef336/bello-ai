@@ -580,3 +580,65 @@ tr + tr td { border-top: 1px solid var(--line); }
 .table-wrap th, .table-wrap td { padding: 8px 12px; text-align: start; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .table-wrap th { background: var(--soft); font-weight: 600; }
 .table-wrap tr:last-child td { border-bottom: 0; }
+
+/* ---------- Daily limits ---------- */
+.quota { display: grid; gap: 8px; margin: 8px 4px 10px; padding: 12px; border-radius: 14px; background: var(--soft); border: 1px solid var(--line); font-size: 13px; }
+.quota-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.quota-row { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; align-items: center; }
+.quota-bar { grid-column: 1 / -1; height: 5px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.quota-bar i { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .3s; }
+.quota-row.low .quota-bar i { background: var(--warn); }
+.quota-row.out .quota-bar i { background: var(--danger); }
+.quota-note { max-width: 820px; margin: 0 auto 6px; font-size: 12px; color: var(--warn); text-align: center; }
+.quota-note.out { color: var(--danger); }
+.limits-row { display: grid !important; gap: 10px; }
+.limits-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.limits-grid label { display: grid; gap: 4px; font-size: 13px; }
+.limits-grid input { width: 100%; }
+.small-btn { padding: 4px 10px; font-size: 12px; }
+@media (max-width: 520px) {
+  .limits-grid { grid-template-columns: 1fr; }
+  .member-row { flex-wrap: wrap; }
+}
+
+/* ---------- Pictures ---------- */
+.draw-size select { max-width: 110px; }
+.drawn { display: grid; gap: 10px; margin: 8px 0 4px; }
+.drawn figure { margin: 0; display: grid; gap: 8px; }
+.drawn img { width: 100%; max-width: 520px; max-height: 70dvh; object-fit: contain; border-radius: 14px; border: 1px solid var(--line); cursor: zoom-in; background: var(--soft); }
+.drawn figcaption { display: flex; gap: 8px; flex-wrap: wrap; }
+.drawn figcaption .btn-ghost { text-decoration: none; font-size: 13px; }
+
+/* ---------- Video ---------- */
+.video-app { display: grid; gap: 14px; max-width: 860px; }
+.video-drop { display: grid; gap: 6px; place-items: center; padding: 34px 16px; border-radius: 18px; border: 1px dashed var(--accent); color: var(--text); font-size: 16px; cursor: pointer; }
+.video-player { width: 100%; max-height: 60dvh; border-radius: 14px; background: #000; }
+.video-form { display: grid; gap: 12px; }
+.video-card { display: grid; gap: 10px; padding: 14px 16px; border-radius: 16px; }
+.video-card h3 { margin: 0; font-size: 15px; }
+.video-card .segmented { flex-wrap: wrap; }
+.trim label { display: inline-flex; align-items: center; gap: 6px; }
+.trim input { width: 90px; }
+.subs { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 320px; overflow-y: auto; }
+.subs li { display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: center; }
+.subs .when { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.subs input { width: 100%; }
+.progress { height: 6px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.progress i { display: block; height: 100%; width: 0; background: var(--grad); transition: width .2s; }
+.video-result { display: grid; gap: 10px; }
+.video-result .btn-primary { text-decoration: none; }
+.frame-shot { display: grid; gap: 8px; padding: 10px; border-radius: 14px; }
+.frame-shot img { max-width: 100%; max-height: 300px; border-radius: 10px; justify-self: start; }
+.frame-shot .btn-ghost { text-decoration: none; }
+.video-note { border-top: 1px solid var(--line); padding-top: 12px; }
+@media (max-width: 520px) {
+  .subs li { grid-template-columns: 1fr; }
+  .trim input { width: 70px; }
+}
+/* Phones: the hint gives way so the bar never runs off the screen. */
+.hint { min-width: 0; overflow: hidden; white-space: nowrap; }
+@media (max-width: 820px) {
+  .composer.drawing .model-select:not(.draw-size) { display: none; }
+  .draw-size { padding-inline-start: 4px; }
+  .draw-size select { max-width: 92px; }
+}

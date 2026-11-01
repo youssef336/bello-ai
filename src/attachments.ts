@@ -77,12 +77,14 @@ export type ApiMessage = { role: Turn['role']; content: string | Part[] };
 
 /**
  * OpenAI-style messages. A model that reads images gets the newest few pictures; one that does
- * not gets a note in their place, so it at least knows a picture was there.
+ * not gets a note in their place, so it at least knows a picture was there. Pictures in an
+ * answer (ones Bello drew) are always a note: providers accept pictures from the user only.
  */
 export function toApiMessages(turns: Turn[], vision: boolean): ApiMessage[] {
   let budget = vision ? MAX_IMAGES_IN_HISTORY : 0;
   const shown = new Set<string>();
   for (let i = turns.length - 1; i >= 0 && budget > 0; i--) {
+    if (turns[i]!.role !== 'user') continue;
     for (const a of turns[i]!.attachments ?? []) {
       if (a.type === 'image' && budget > 0) {
         shown.add(a.data);
@@ -93,6 +95,7 @@ export function toApiMessages(turns: Turn[], vision: boolean): ApiMessage[] {
   return turns.map((t) => {
     const images = (t.attachments ?? []).filter((a) => a.type === 'image');
     const text = turnText(t);
+    // `shown` only ever holds user pictures, so a drawn one becomes a note below.
     if (!images.length) return { role: t.role, content: text };
     const notes = images.filter((a) => !shown.has(a.data)).map((a) => `[picture: ${a.name}]`);
     const caption = [text, ...notes].filter(Boolean).join('\n') || ' ';

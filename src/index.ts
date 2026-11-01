@@ -15,7 +15,9 @@ import { benchSome } from './bench';
 import { chat, pickAnswer } from './chat';
 import { loadRound, nextScanAt, scanById, scheduledScan } from './discovery';
 import { type Env, error, json, newId, now } from './env';
+import { IMAGE_MODEL_NAMES, makeImage, parseImageRequest } from './images';
 import { checkKey, KEYED_PROVIDERS, keysFor, saveKey } from './keys';
+import { consume, limitReached, refund, setLimits, usageOf } from './limits';
 import {
   allowPaidModel,
   disallowPaidModel,
@@ -26,6 +28,7 @@ import {
   setSettingStmt,
 } from './paid';
 import { configuredProviders } from './providers';
+import { transcribe } from './transcribe';
 
 type Handler = (
   req: Request,
@@ -42,8 +45,11 @@ const OWNER = true;
 const routes: [string, RegExp, boolean, Handler][] = [
   ['GET', /^\/api\/me$/, ANYONE, async (_r, env, _c, user) => {
     const keys = await keysFor(env, user);
-    return json({ ...user, providers: [...keys.keys()] });
+    // Pictures and video subtitles run on the owner's Workers AI.
+    return json({ ...user, providers: [...keys.keys()], media: Boolean(env.AI) });
   }],
+
+  ['GET', /^\/api\/limits$/, ANYONE, async (_r, env, _c, user) => json(await usageOf(env, user))],
 
   ['GET', /^\/api\/providers$/, ANYONE, async (_r, env, _c, user) => {
     const keys = await keysFor(env, user);
@@ -67,7 +73,9 @@ const routes: [string, RegExp, boolean, Handler][] = [
          FROM messages m JOIN conversations c ON c.id = m.conversation_id
          LEFT JOIN models md ON md.id = m.model_id
         WHERE m.conversation_id = ? AND c.user_id = ? ORDER BY m.created_at`,
-    ).bind(id, user.id).all();
+    ).bind(id, user.id).all<{ model_id: string | null; model_name: string | null }>();
+    // Picture models are not in the chat registry.
+    for (const m of rows.results) m.model_name ??= IMAGE_MODEL_NAMES[m.model_id?.replace(/^workers-ai:/, '') ?? ''] ?? null;
     return json(rows.results);
   }],
 
@@ -91,23 +99,37 @@ const routes: [string, RegExp, boolean, Handler][] = [
       web?: boolean;
       compare?: boolean;
     }>();
-    if (body.regenerate) {
+    if (!(await consume(env, user, 'messages'))) return limitReached('messages');
+    const res = await (async () => {
+      if (body.regenerate) {
+        return chat(env, ctx, user, {
+          conversationId: body.conversationId, message: '', model: body.model, regenerate: true, web: body.web === true,
+        });
+      }
+      if (typeof body.message !== 'string' || body.message.length > 100_000) return error(400, 'bad message');
+      const attachments = parseAttachments(body.attachments);
+      if (typeof attachments === 'string') return error(400, attachments);
       return chat(env, ctx, user, {
-        conversationId: body.conversationId, message: '', model: body.model, regenerate: true, web: body.web === true,
+        conversationId: body.conversationId,
+        message: body.message,
+        model: body.model,
+        attachments,
+        web: body.web === true,
+        compare: body.compare === true,
       });
-    }
-    if (typeof body.message !== 'string' || body.message.length > 100_000) return error(400, 'bad message');
-    const attachments = parseAttachments(body.attachments);
-    if (typeof attachments === 'string') return error(400, attachments);
-    return chat(env, ctx, user, {
-      conversationId: body.conversationId,
-      message: body.message,
-      model: body.model,
-      attachments,
-      web: body.web === true,
-      compare: body.compare === true,
-    });
+    })();
+    // Refused before an answer started: it does not count against today's limit.
+    if (!res.ok) await refund(env, user, 'messages');
+    return res;
   }],
+
+  ['POST', /^\/api\/images$/, ANYONE, async (req, env, _c, user) => {
+    const parsed = parseImageRequest(await req.json<Record<string, unknown>>().catch(() => ({})));
+    return typeof parsed === 'string' ? error(400, parsed) : makeImage(env, user, parsed);
+  }],
+
+  ['POST', /^\/api\/transcribe$/, ANYONE, async (req, env, _c, user) =>
+    transcribe(env, user, await req.json<Record<string, unknown>>().catch(() => ({})))],
 
   ['POST', /^\/api\/compare\/pick$/, ANYONE, async (req, env, _c, user) => {
     const id = await pickAnswer(env, user, await req.json());
@@ -252,17 +274,27 @@ const routes: [string, RegExp, boolean, Handler][] = [
     const [users, invites] = await Promise.all([
       env.DB.prepare(
         `SELECT u.id, u.email, u.name, u.picture, u.role, u.created_at, u.last_seen,
+           u.limit_messages, u.limit_images, u.limit_video,
            (SELECT COUNT(*) FROM user_keys k WHERE k.user_id = u.id) AS keys,
            (SELECT COALESCE(SUM(requests + fallbacks), 0) FROM usage g
               WHERE g.user_id = u.id AND g.day >= date('now', '-29 days')) AS messages_30d
          FROM users u ORDER BY u.role = 'owner' DESC, u.created_at`,
-      ).all(),
+      ).all<{ id: string; role: 'owner' | 'member' }>(),
       env.DB.prepare(
         `SELECT email, created_at FROM invites WHERE email NOT IN (SELECT email FROM users WHERE email IS NOT NULL)
           ORDER BY created_at DESC`,
       ).all(),
     ]);
-    return json({ users: users.results, invites: invites.results, googleReady: googleEnabled(env) });
+    // Each person's limits as they apply today, next to what they used.
+    const withUse = await Promise.all(users.results.map(async (u) => ({
+      ...u,
+      today: (await usageOf(env, { id: u.id, role: u.role, email: null, name: null, picture: null })).kinds,
+    })));
+    return json({ users: withUse, invites: invites.results, googleReady: googleEnabled(env) });
+  }],
+
+  ['PUT', /^\/api\/members\/([\w-]+)\/limits$/, OWNER, async (req, env, _c, _u, [id]) => {
+    return setLimits(env, id!, await req.json<Record<string, unknown>>().catch(() => ({})));
   }],
 
   ['POST', /^\/api\/members\/invite$/, OWNER, async (req, env) => {
@@ -285,7 +317,7 @@ const routes: [string, RegExp, boolean, Handler][] = [
     if (!user) return error(404, 'not found');
     await env.DB.batch([
       env.DB.prepare('DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id = ?)').bind(id),
-      ...['conversations', 'memories', 'sessions', 'user_keys', 'cooldowns', 'usage'].map((t) =>
+      ...['conversations', 'memories', 'sessions', 'user_keys', 'cooldowns', 'usage', 'daily_use'].map((t) =>
         env.DB.prepare(`DELETE FROM ${t} WHERE user_id = ?`).bind(id)),
       env.DB.prepare('DELETE FROM invites WHERE email = ?').bind(user.email),
       env.DB.prepare('DELETE FROM users WHERE id = ?').bind(id),
@@ -342,6 +374,7 @@ const routes: [string, RegExp, boolean, Handler][] = [
       ),
       memories: await mine('SELECT * FROM memories WHERE user_id = ?'),
       usage: await mine('SELECT * FROM usage WHERE user_id = ?'),
+      daily_use: await mine('SELECT * FROM daily_use WHERE user_id = ?'),
     };
     if (user.role === 'owner') {
       for (const t of ['models', 'events', 'settings', 'users', 'invites']) {
@@ -404,7 +437,7 @@ const SECURITY_HEADERS: Record<string, string> = {
   'referrer-policy': 'no-referrer',
   'x-frame-options': 'DENY',
   'content-security-policy':
-    "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://*.googleusercontent.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+    "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https://*.googleusercontent.com; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
 };
 
 export default {
@@ -430,6 +463,7 @@ export default {
         await env.DB.batch([
           env.DB.prepare('DELETE FROM events WHERE at < ?').bind(now() - 90 * 24 * 3600_000),
           env.DB.prepare('DELETE FROM cooldowns WHERE until < ?').bind(now()),
+          env.DB.prepare(`DELETE FROM daily_use WHERE day < date('now', '-40 days')`),
         ]);
         const report = await scheduledScan(env);
         console.log('discovery', JSON.stringify(report));
