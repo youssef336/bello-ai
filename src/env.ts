@@ -8,6 +8,13 @@ export interface Env {
   OPENROUTER_API_KEY?: string;
   GEMINI_API_KEY?: string;
   CEREBRAS_API_KEY?: string;
+  /** Google sign-in (OAuth client of type "Web application"). */
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  /** Google email that signs in as the owner. */
+  OWNER_EMAIL?: string;
+  /** base64 of 32 random bytes; encrypts the API keys people save. */
+  KEYS_ENCRYPTION_KEY?: string;
 }
 
 export const now = (): number => Date.now();

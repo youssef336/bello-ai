@@ -30,3 +30,29 @@ describe('nextScanAt', () => {
   it('waits the configured days after a finished round', () =>
     expect(nextScanAt({ startedAt: 0, done: ['a', 'b'] }, ['a', 'b'], 3 * H)).toBe(SCAN_EVERY_DAYS * 24 * H));
 });
+
+import { CASES, finalText } from '../src/bench';
+
+describe('task exam', () => {
+  const check = (prompt: RegExp, answer: string) => CASES.find((c) => prompt.test(c.prompt))!.pass(answer);
+  it('grades code', () => {
+    expect(check(/is_palindrome/, 'def is_palindrome(s):\n    s = s.lower()\n    return s == s[::-1]')).toBe(true);
+    expect(check(/is_palindrome/, 'I cannot help with that')).toBe(false);
+    expect(check(/map/, '[4, 6]')).toBe(true);
+  });
+  it('grades reasoning and ignores <think>', () => {
+    expect(check(/bat and a ball/, finalText('<think>10 minus 5…</think>5'))).toBe(true);
+    expect(check(/bat and a ball/, '10')).toBe(false);
+    expect(check(/17 × 24/, '408')).toBe(true);
+    expect(check(/strawberry/, '3')).toBe(true);
+    expect(check(/strawberry/, '2')).toBe(false);
+    expect(check(/What does this Python print/, '2')).toBe(true);
+    expect(check(/What does this Python print/, '3')).toBe(false);
+  });
+  it('grades Egyptian Arabic and MSA', () => {
+    expect(check(/بالعامية المصرية/, 'ولا حاجة، قاعد بذاكر شوية دلوقتي')).toBe(true);
+    expect(check(/بالعامية المصرية/, 'I am working now')).toBe(false);
+    expect(check(/الفصحى/, 'الطقس جميل اليوم.')).toBe(true);
+    expect(check(/أطباء/, 'طبيب')).toBe(true);
+  });
+});

@@ -37,6 +37,9 @@ const ICONS = {
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
   pin: '<path d="M12 17v5M5 17h14l-2-4V5H7v8z"/>',
   redo: '<path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/>',
+  speak: '<path d="M11 5 6 9H3v6h3l5 4zM15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/>',
+  hush: '<path d="M11 5 6 9H3v6h3l5 4zM22 9l-6 6M16 9l6 6"/>',
+  share: '<path d="M12 3v13M7 8l5-5 5 5M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/>',
 };
 const icon = (name) => {
   const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -148,18 +151,64 @@ document.addEventListener('click', (e) => {
 
 // --- Auth ----------------------------------------------------------------------------------
 
-function showLogin() {
+const LOGIN_ERRORS = {
+  not_invited: 'الإيميل ده مش متدعي لسه — اطلب من صاحب الموقع يضيفك.',
+  email: 'حساب Google ده من غير إيميل متأكد منه.',
+  expired: 'الطلب خلص وقته، جرّب تاني.',
+  google: 'حصلت مشكلة مع Google، جرّب تاني.',
+};
+
+async function showLogin() {
   $('app').hidden = true;
   $('login').hidden = false;
-  $('password').focus();
+  const cfg = await fetch('/api/auth/config').then((r) => r.json()).catch(() => ({ google: false }));
+  $('google-login').hidden = !cfg.google;
+  // No Google yet: the password form is the way in, so open it.
+  $('password-login').open = !cfg.google;
+  const err = new URLSearchParams(location.search).get('login_error');
+  if (err) {
+    $('login-error').textContent = LOGIN_ERRORS[err] || 'ماقدرناش ندخلك، جرّب تاني.';
+    $('login-error').hidden = false;
+    history.replaceState(null, '', '/');
+  }
 }
 
-async function showApp() {
+const session = { me: null };
+const isOwner = () => session.me?.role === 'owner';
+
+function renderMe() {
+  const me = session.me;
+  for (const n of document.querySelectorAll('[data-owner]')) n.hidden = !isOwner();
+  const name = me.name || me.email || 'أنا';
+  $('me').replaceChildren(
+    me.picture
+      ? el('img', { src: me.picture, alt: '', class: 'me-avatar', referrerpolicy: 'no-referrer' })
+      : el('span', { class: 'me-avatar letter' }, name.trim()[0]?.toUpperCase() || '?'),
+    el('span', { class: 'me-text' },
+      el('b', { dir: 'auto' }, name),
+      el('span', { class: 'muted small' }, isOwner() ? 'المالك' : 'عضو'),
+    ),
+  );
+  const noKeys = me.providers.length === 0;
+  $('no-keys').hidden = !noKeys;
+  $('keys-dot').hidden = !noKeys;
+}
+
+async function showApp(me) {
+  session.me = me;
   $('login').hidden = true;
   $('app').hidden = false;
+  renderMe();
   await Promise.all([loadConversations(), loadModelPicker()]);
-  $('input').focus();
+  if (!matchMedia('(pointer: coarse)').matches) $('input').focus();
 }
+
+async function refreshMe() {
+  session.me = await api('/api/me');
+  renderMe();
+}
+
+for (const b of document.querySelectorAll('[data-go]')) b.addEventListener('click', () => showView(b.dataset.go));
 
 $('login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -167,7 +216,7 @@ $('login-form').addEventListener('submit', async (e) => {
   try {
     await api('/api/login', { method: 'POST', body: JSON.stringify({ password: $('password').value }) });
     $('password').value = '';
-    await showApp();
+    await showApp(await api('/api/me'));
   } catch (err) {
     $('login-error').textContent = err.message === 'Wrong password' ? 'كلمة السر غلط' : err.message;
     $('login-error').hidden = false;
@@ -181,8 +230,8 @@ $('logout').addEventListener('click', async () => {
 
 // --- Navigation ----------------------------------------------------------------------------
 
-const views = { chat: null, models: loadModels, memory: loadMemories, activity: loadActivity };
-const TITLES = { models: 'الموديلات', memory: 'الذاكرة', activity: 'النشاط' };
+const views = { chat: null, models: loadModels, memory: loadMemories, activity: loadActivity, keys: loadKeys, members: loadMembers, settings: loadSettings };
+const TITLES = { models: 'الموديلات', memory: 'الذاكرة', activity: 'النشاط', keys: 'مفاتيحي', members: 'الأعضاء', settings: 'المظهر' };
 
 function closeSidebar() {
   $('sidebar').classList.remove('open');
@@ -308,7 +357,15 @@ function messageActions(m) {
       setTimeout(() => copyBtn.replaceChildren(icon('copy')), 1500);
     },
   }, icon('copy'));
+  const speakBtn = el('button', { class: 'icon-btn', title: 'اقرالي', onclick: () => speak(m.content, speakBtn) }, icon('speak'));
+  const extras = [speakBtn];
+  if (navigator.share) {
+    extras.push(el('button', {
+      class: 'icon-btn', title: 'شارك', onclick: () => navigator.share({ text: m.content }).catch(() => {}),
+    }, icon('share')));
+  }
   return [
+    ...extras,
     // CSS shows this only on the last answer.
     el('button', { class: 'icon-btn regen', title: 'رد تاني', onclick: () => send('', { regenerate: true }) }, icon('redo')),
     copyBtn,
@@ -444,6 +501,7 @@ async function send(text, { regenerate = false } = {}) {
         answer.content += data.t;
       } else if (event === 'done') {
         answer.id = data.messageId;
+        navigator.vibrate?.(12);
       } else if (event === 'error') {
         answer.content += `${answer.content ? '\n\n' : ''}⚠️ ${data.message}`;
       }
@@ -580,6 +638,8 @@ async function loadModels() {
           m.latency_ms ? el('span', { class: 'badge' }, `${(m.latency_ms / 1000).toFixed(1)}s`) : null,
           m.context_length ? el('span', { class: 'badge' }, `${Math.round(m.context_length / 1000)}k`) : null,
           m.supports_vision ? el('span', { class: 'badge' }, 'صور') : null,
+          ...[['score_code', 'كود'], ['score_reasoning', 'منطق'], ['score_arabic', 'عربي']].map(([k, label]) =>
+            m[k] == null ? null : el('span', { class: `badge ${m[k] >= 100 ? 'ok' : m[k] === 0 ? 'bad' : 'warn'}`, title: 'نتيجة الامتحان' }, `${label} ${m[k]}`)),
           runs ? el('span', { class: 'badge' }, `${Math.round((m.ok_count / runs) * 100)}% نجاح`) : null,
         ),
         el('div', { class: 'bar', title: `الجودة ${m.quality}` }, el('i', { style: false, 'data-q': m.quality })),
@@ -587,7 +647,7 @@ async function loadModels() {
           el('span', { title: m.last_error || '' }, m.verified_at
             ? `اتأكد ${ago(m.verified_at)}`
             : m.last_error ? 'هيتجرّب تاني خلال ساعة' : 'مستني دوره في التجربة'),
-          el('button', {
+          !isOwner() ? null : el('button', {
             class: 'btn-ghost',
             onclick: async () => {
               const status = m.status === 'disabled' ? 'enabled' : 'disabled';
@@ -734,6 +794,256 @@ async function loadActivity() {
   );
 }
 
+// --- My keys -------------------------------------------------------------------------------
+
+const KEY_GUIDES = {
+  groq: { url: 'https://console.groq.com/keys', steps: ['سجّل دخول بحساب Google', 'اضغط Create API Key وانسخ المفتاح'], hint: 'gsk_…', note: 'الأسرع — ردود في أقل من ثانية' },
+  gemini: { url: 'https://aistudio.google.com/apikey', steps: ['اضغط Create API key وانسخ المفتاح', 'ما تفعّلش الـ billing (يفضل مجاني)'], hint: 'AIza… أو AQ.…', note: 'Gemini Flash و Gemma — عربي ممتاز' },
+  openrouter: { url: 'https://openrouter.ai/settings/keys', steps: ['سجّل واضغط Create Key وانسخ المفتاح', 'من غير ما تشحن أي رصيد'], hint: 'sk-or-…', note: 'عشرات الموديلات المجانية من شركات مختلفة' },
+};
+
+async function loadKeys() {
+  const list = await api('/api/keys');
+  $('keys-list').replaceChildren(...list.map((p) => {
+    const guide = KEY_GUIDES[p.id] || { url: '#', steps: [], hint: '', note: '' };
+    const input = el('input', { type: 'password', dir: 'ltr', placeholder: guide.hint, autocomplete: 'off', spellcheck: 'false' });
+    const status = el('span', { class: 'muted small' });
+    const save = el('button', { class: 'btn-primary' }, p.saved ? 'غيّر' : 'احفظ');
+    save.addEventListener('click', async () => {
+      if (!input.value.trim()) return input.focus();
+      save.disabled = true;
+      status.textContent = 'بنتأكد إن المفتاح شغال…';
+      try {
+        await api(`/api/keys/${p.id}`, { method: 'PUT', body: JSON.stringify({ key: input.value }) });
+        notify(`✓ اتحفظ مفتاح ${p.label}`);
+        await Promise.all([loadKeys(), refreshMe(), loadModelPicker()]);
+      } catch (err) {
+        status.textContent = `✗ ${err.message}`;
+        save.disabled = false;
+      }
+    });
+    const badge = p.saved
+      ? el('span', { class: 'badge ok' }, `✓ ••••${p.saved.hint}`)
+      : p.fromApp
+        ? el('span', { class: 'badge' }, 'من مفاتيح الموقع')
+        : el('span', { class: 'badge warn' }, 'مش متضاف');
+    return el('div', { class: `key-card glass ${p.saved || p.fromApp ? 'done' : ''}` },
+      el('div', { class: 'head' },
+        el('div', {}, el('b', {}, p.label), el('div', { class: 'muted small' }, guide.note)),
+        badge,
+      ),
+      el('ol', { class: 'steps' },
+        el('li', {}, 'افتح ', el('a', { href: guide.url, target: '_blank', rel: 'noopener noreferrer' }, new URL(guide.url, location.href).host)),
+        ...guide.steps.map((step) => el('li', { dir: 'auto' }, step)),
+        el('li', {}, 'الصقه هنا واضغط احفظ'),
+      ),
+      el('div', { class: 'row key-row' }, input, save,
+        p.saved ? el('button', {
+          class: 'icon-btn', title: 'امسح المفتاح', onclick: async () => {
+            if (!(await confirmDialog(`تمسح مفتاح ${p.label}؟`, 'الموديلات بتاعته هتقف عندك لحد ما تضيف مفتاح تاني.'))) return;
+            await api(`/api/keys/${p.id}`, { method: 'DELETE' });
+            notify('اتمسح المفتاح');
+            await Promise.all([loadKeys(), refreshMe(), loadModelPicker()]);
+          },
+        }, icon('trash')) : null),
+      status,
+    );
+  }));
+}
+
+// --- Members (owner) -----------------------------------------------------------------------
+
+function avatar(u) {
+  return u.picture
+    ? el('img', { src: u.picture, alt: '', class: 'me-avatar', referrerpolicy: 'no-referrer' })
+    : el('span', { class: 'me-avatar letter' }, (u.name || u.email || '?')[0].toUpperCase());
+}
+
+async function loadMembers() {
+  const data = await api('/api/members');
+  $('google-warning').hidden = data.googleReady;
+  const userRow = (u) => el('li', {},
+    el('span', { class: 'member' }, avatar(u),
+      el('span', { class: 'me-text' },
+        el('b', { dir: 'auto' }, u.name || u.email || 'المالك'),
+        el('span', { class: 'muted small', dir: 'ltr' }, u.email || ''),
+      ),
+    ),
+    el('span', { class: 'row' },
+      el('span', { class: 'badge' }, `${u.messages_30d} رسالة/شهر`),
+      el('span', { class: `badge ${u.keys ? 'ok' : 'warn'}` }, u.keys ? `${u.keys} مفتاح` : 'من غير مفاتيح'),
+      u.last_seen ? el('span', { class: 'muted small' }, ago(u.last_seen)) : null,
+      u.role === 'owner' ? el('span', { class: 'badge ok' }, 'المالك') : el('button', {
+        class: 'icon-btn', title: 'شيله', onclick: async () => {
+          if (!(await confirmDialog('تشيل العضو ده؟', `${u.email} مش هيقدر يدخل تاني، وكل محادثاته ومفاتيحه هتتمسح.`, 'شيله'))) return;
+          await api(`/api/members/${u.id}`, { method: 'DELETE' });
+          notify('اتشال العضو');
+          loadMembers();
+        },
+      }, icon('trash')),
+    ),
+  );
+  const inviteRow = (i) => el('li', { class: 'pending' },
+    el('span', { class: 'member' }, el('span', { class: 'me-avatar letter' }, '✉'),
+      el('span', { class: 'me-text' }, el('b', { dir: 'ltr' }, i.email), el('span', { class: 'muted small' }, `مستني يدخل · اتدعى ${ago(i.created_at)}`))),
+    el('button', {
+      class: 'icon-btn', title: 'إلغاء الدعوة', onclick: async () => {
+        await api(`/api/members/invite/${encodeURIComponent(i.email)}`, { method: 'DELETE' });
+        loadMembers();
+      },
+    }, icon('x')),
+  );
+  $('members-list').replaceChildren(...data.users.map(userRow), ...data.invites.map(inviteRow));
+}
+
+$('invite-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await api('/api/members/invite', { method: 'POST', body: JSON.stringify({ email: $('invite-email').value }) });
+    notify('✓ اتدعى — قوله يدخل بحساب Google ده');
+    $('invite-email').value = '';
+    loadMembers();
+  } catch (err) {
+    notify(err.message);
+  }
+});
+
+// --- Voice, read-aloud, quick actions -------------------------------------------------------
+
+/** Text worth reading out: no code blocks or Markdown symbols. */
+const speakable = (md) => md.replace(/```[\s\S]*?```/g, ' (كود) ').replace(/[`*#>_]/g, '').replace(/\n+/g, '. ');
+
+let speaking = null;
+function speak(text, btn) {
+  if (!('speechSynthesis' in window)) return notify('المتصفح ده مش بيدعم القراءة بصوت');
+  const wasThis = speaking === btn;
+  speechSynthesis.cancel();
+  if (speaking) speaking.replaceChildren(icon('speak'));
+  speaking = null;
+  if (wasThis) return;
+  const u = new SpeechSynthesisUtterance(speakable(text));
+  const arabic = /[؀-ۿ]/.test(text);
+  u.lang = arabic ? 'ar-EG' : 'en-US';
+  const voice = speechSynthesis.getVoices().find((v) => v.lang.startsWith(arabic ? 'ar' : 'en'));
+  if (voice) u.voice = voice;
+  u.onend = () => {
+    btn.replaceChildren(icon('speak'));
+    speaking = null;
+  };
+  speaking = btn;
+  btn.replaceChildren(icon('hush'));
+  speechSynthesis.speak(u);
+}
+
+const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (Recognition) {
+  $('mic').hidden = false;
+  let rec = null;
+  $('mic').addEventListener('click', () => {
+    if (rec) return rec.stop();
+    rec = new Recognition();
+    rec.lang = 'ar-EG';
+    rec.interimResults = true;
+    rec.continuous = false;
+    const before = $('input').value;
+    rec.onresult = (e) => {
+      const said = [...e.results].map((r) => r[0].transcript).join(' ');
+      $('input').value = `${before}${before ? ' ' : ''}${said}`;
+      autosize();
+    };
+    rec.onerror = (e) => { if (e.error === 'not-allowed') notify('اسمح للموقع يستخدم المايك'); };
+    rec.onend = () => {
+      rec = null;
+      $('mic').classList.remove('live');
+      $('input').focus();
+    };
+    $('mic').classList.add('live');
+    navigator.vibrate?.(10);
+    rec.start();
+  });
+}
+
+/** With text typed: apply to it. Empty box: apply to the last answer. */
+const QUICK = [
+  { label: '✨ لخّص', withText: 'لخّص ده في نقط قصيرة:\n\n', alone: 'لخّص ردك اللي فات في نقط قصيرة.' },
+  { label: '🌐 ترجم', withText: 'ترجم ده (للإنجليزي لو عربي، وللعربي لو إنجليزي):\n\n', alone: 'ترجم ردك اللي فات (للإنجليزي لو عربي، وللعربي لو إنجليزي).' },
+  { label: '✍️ صحّح', withText: 'صحّح الأخطاء الإملائية والنحوية في ده ورجّعهولي مصحّح:\n\n', alone: null },
+  { label: '🧒 بسّط', withText: 'اشرحلي ده ببساطة كأني مبتدئ:\n\n', alone: 'اشرح ردك اللي فات ببساطة أكتر، كأني مبتدئ.' },
+  { label: '➕ كمّل', withText: null, alone: 'كمّل.' },
+];
+
+function renderQuick() {
+  $('quick').replaceChildren(...QUICK.map((q) => el('button', {
+    type: 'button',
+    class: 'quick-chip',
+    onclick: () => {
+      const text = $('input').value.trim();
+      if (text && q.withText) {
+        $('input').value = '';
+        autosize();
+        return send(q.withText + text);
+      }
+      if (!text && q.alone && state.conversationId) return send(q.alone);
+      notify(q.withText ? 'اكتب أو الصق النص الأول' : 'ابدأ محادثة الأول');
+    },
+  }, q.label)));
+}
+renderQuick();
+
+// --- Appearance ----------------------------------------------------------------------------
+
+const THEMES = [
+  { id: 'purple', name: 'بنفسجي', colors: ['#0c0817', '#a855f7', '#6d28d9'] },
+  { id: 'ocean', name: 'أزرق محيط', colors: ['#060b17', '#38bdf8', '#2563eb'] },
+  { id: 'emerald', name: 'زمرّدي', colors: ['#05110c', '#34d399', '#059669'] },
+  { id: 'sunset', name: 'غروب', colors: ['#130905', '#fb923c', '#e11d48'] },
+  { id: 'rose', name: 'وردي', colors: ['#14060f', '#f472b6', '#be185d'] },
+  { id: 'gold', name: 'دهبي', colors: ['#100d05', '#fbbf24', '#b45309'] },
+  { id: 'amoled', name: 'أسود AMOLED', colors: ['#000000', '#e5e5e5', '#737373'] },
+  { id: 'light', name: 'فاتح', colors: ['#f7f5fc', '#7c3aed', '#4f46e5'] },
+];
+
+const pref = {
+  get: (k, d) => { try { return localStorage.getItem(k) || d; } catch { return d; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
+};
+
+function applyAppearance() {
+  const theme = pref.get('bello-theme', 'purple');
+  document.documentElement.setAttribute('data-theme', theme);
+  document.documentElement.setAttribute('data-size', pref.get('bello-size', 'm'));
+  const bg = THEMES.find((t) => t.id === theme)?.colors[0] || '#0c0817';
+  document.querySelector('meta[name="theme-color"]').setAttribute('content', bg);
+}
+
+function loadSettings() {
+  const current = pref.get('bello-theme', 'purple');
+  $('themes').replaceChildren(...THEMES.map((t) => {
+    const swatch = el('span', { class: 'swatch' });
+    swatch.style.background = `linear-gradient(135deg, ${t.colors[1]}, ${t.colors[2]})`;
+    const card = el('button', { class: `theme-card ${t.id === current ? 'on' : ''}`, onclick: () => {
+      pref.set('bello-theme', t.id);
+      applyAppearance();
+      loadSettings();
+      notify(`✓ ${t.name}`);
+    } }, swatch, el('span', {}, t.name));
+    card.style.background = t.colors[0];
+    card.style.color = t.id === 'light' ? '#1e1b2e' : '#f4f2fa';
+    return card;
+  }));
+  const size = pref.get('bello-size', 'm');
+  for (const b of $('font-size').querySelectorAll('button')) b.classList.toggle('on', b.dataset.size === size);
+}
+
+for (const b of document.querySelectorAll('#font-size button')) {
+  b.addEventListener('click', () => {
+    pref.set('bello-size', b.dataset.size);
+    applyAppearance();
+    loadSettings();
+  });
+}
+applyAppearance();
+
 // --- Boot ----------------------------------------------------------------------------------
 
-api('/api/me').then(showApp).catch(() => showLogin());
+api('/api/me').then(showApp).catch(() => {});

@@ -41,13 +41,14 @@ export function callProvider(
   provider: Provider,
   env: Env,
   body: Record<string, unknown>,
+  key: string | undefined = provider.keyOf(env),
   signal?: AbortSignal,
 ): Promise<Response> {
   if (provider.call) return provider.call(env, body);
   return fetch(`${provider.baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
-      authorization: `Bearer ${provider.keyOf(env)}`,
+      authorization: `Bearer ${key}`,
       'content-type': 'application/json',
       ...provider.extraHeaders,
     },

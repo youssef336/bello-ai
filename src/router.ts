@@ -25,6 +25,10 @@ export interface ModelRow {
   paid: number;
   price_in: number | null;
   price_out: number | null;
+  score_code: number | null;
+  score_reasoning: number | null;
+  score_arabic: number | null;
+  bench_at: number | null;
 }
 
 export interface RouteRequest {
@@ -48,11 +52,19 @@ export function scoreModel(m: ModelRow, req: RouteRequest): number {
   let score = m.quality;
 
   if (req.language === 'ar') {
-    if (m.arabic_ok === 0) return -Infinity;
+    if (m.arabic_ok === 0 || m.score_arabic === 0) return -Infinity;
     score += m.arabic_ok === 1 ? 10 : -5;
+    // Measured Arabic (Egyptian + MSA) beats the single quick-test answer.
+    if (m.score_arabic !== null) score += (m.score_arabic - 50) * 0.4;
   }
-  if (req.task === 'code' && CODE_NAME.test(m.model)) score += 10;
-  if (req.task === 'reasoning' && REASONING_NAME.test(m.model)) score += 8;
+  // Measured skill for this kind of task wins; the name is only a guess until the exam is taken.
+  const measured = req.task === 'code' ? m.score_code : req.task === 'reasoning' ? m.score_reasoning : null;
+  if (measured !== null) score += (measured - 50) * 0.6;
+  else if (req.task === 'code' && CODE_NAME.test(m.model)) score += 10;
+  else if (req.task === 'reasoning' && REASONING_NAME.test(m.model)) score += 8;
+  if (req.task === 'general' && m.score_code !== null && m.score_reasoning !== null) {
+    score += ((m.score_code + m.score_reasoning) / 2 - 50) * 0.2;
+  }
 
   // Laplace-smoothed success rate: a new model starts at 0.5 and earns its place.
   const success = (m.ok_count + 1) / (m.ok_count + m.fail_count + 2);

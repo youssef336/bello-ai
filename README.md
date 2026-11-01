@@ -27,8 +27,18 @@ hits its limit, and **adds new free models by itself** as soon as a provider pub
   tokens. Top up OpenRouter credits, switch paid mode on, allow the models you want, set a monthly
   cap. Empty credits or a reached cap → back to free models; it never spends without credits.
 - **Memory**: notes about you; pinned ones always go in, the rest only when they match the message.
-- **Owner-only**: one password (PBKDF2, 100k rounds), HttpOnly SameSite=Strict session, 5 tries per
-  IP per 15 min, same-origin check, strict CSP. Provider keys live only in Worker secrets.
+- **Friends, without sharing your limits**: invite emails; they sign in with Google and add their
+  own free keys (a guided page, ~2 minutes). Keys are AES-256-GCM encrypted, bound to the user and
+  provider. Each person has their own chats, memory, usage and rate-limit rests; Workers AI and paid
+  models stay the owner's. Removing a member deletes all their data.
+- **Picks by measured skill**: every model sits a 9-question exam (code, reasoning, Egyptian
+  Arabic + MSA; one hard question each). The router ranks by the score for the kind of message,
+  then reliability and speed. Re-taken monthly; new models take it within hours.
+- **Secure**: Google OpenID Connect or the owner password (PBKDF2, 100k rounds); HttpOnly
+  SameSite=Strict sessions, 5 password tries per IP per 15 min, same-origin check, strict CSP.
+- **Nice to use**: 8 themes (purple, ocean, emerald, sunset, rose, gold, AMOLED, light), text size,
+  voice input in Egyptian Arabic, read-aloud, share, quick actions (summarise, translate, fix,
+  simplify, continue), haptics on Android.
 - **Export** everything as one JSON file.
 - **Phone first**: install it from the browser menu (Add to Home Screen) and it opens full screen
   like an app. Conversations grouped by day with search, regenerate the last answer, delete with
@@ -89,6 +99,25 @@ Then open **الموديلات → دوّر دلوقتي** once (after that the 
 
 **Auto-deploy from GitHub:** add the repo secrets `CLOUDFLARE_API_TOKEN` (template "Edit Cloudflare
 Workers" + D1 edit) and `CLOUDFLARE_ACCOUNT_ID`. Every push to `main` then tests, migrates and deploys.
+
+## Google sign-in (for friends, optional)
+
+1. [console.cloud.google.com](https://console.cloud.google.com) → new project **Bello AI**.
+2. **APIs & Services → OAuth consent screen**: External · app name *Bello AI* · your email ·
+   scopes: only `openid`, `email`, `profile` → **Publish app** (basic scopes need no review).
+3. **Credentials → Create credentials → OAuth client ID** → *Web application*
+   - Authorized redirect URI: `https://bello-ai.<your-subdomain>.workers.dev/api/auth/google/callback`
+4. Put the two values in secrets, plus the Google email that is you:
+   ```bash
+   npx wrangler secret put GOOGLE_CLIENT_ID
+   npx wrangler secret put GOOGLE_CLIENT_SECRET
+   npx wrangler secret put OWNER_EMAIL
+   ```
+5. Also once: `npx wrangler secret put KEYS_ENCRYPTION_KEY` with
+   `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`.
+   Changing it later makes saved keys unreadable (people just re-add them).
+
+Then **الأعضاء → ادعي** an email; that person opens the site and signs in with that Google account.
 
 ## Free-plan limits that matter
 

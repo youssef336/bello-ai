@@ -16,6 +16,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
   <link rel="stylesheet" href="/style.css">
+  <script src="/theme.js"></script>
   <script type="module" src="/app.js"></script>
 </head>
 <body>
@@ -26,8 +27,15 @@
       <img src="/icon.svg" alt="" class="logo-lg">
       <h1>Bello AI</h1>
       <p class="muted">كل الموديلات المجانية في مساعد واحد</p>
-      <input id="password" type="password" autocomplete="current-password" placeholder="كلمة السر" required>
-      <button type="submit" class="btn-primary">دخول</button>
+      <a id="google-login" class="btn-google" href="/api/auth/google" hidden>
+        <svg viewBox="0 0 48 48" class="g-logo"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>
+        ادخل بحساب Google
+      </a>
+      <details id="password-login" class="pw-login">
+        <summary>دخول المالك بكلمة السر</summary>
+        <input id="password" type="password" autocomplete="current-password" placeholder="كلمة السر">
+        <button type="submit" class="btn-primary">دخول</button>
+      </details>
       <p id="login-error" class="error" hidden></p>
     </form>
   </section>
@@ -58,6 +66,16 @@
         <button data-view="activity">
           <svg viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>النشاط
         </button>
+        <button data-view="keys">
+          <svg viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 8.7-8.7M17 6l3 3M14.5 8.5l2 2"/></svg>مفاتيحي
+          <i id="keys-dot" class="nav-dot" hidden></i>
+        </button>
+        <button data-view="settings">
+          <svg viewBox="0 0 24 24"><circle cx="13.5" cy="6.5" r="1.5"/><circle cx="17.5" cy="10.5" r="1.5"/><circle cx="8.5" cy="7.5" r="1.5"/><circle cx="6.5" cy="12.5" r="1.5"/><path d="M12 2a10 10 0 0 0 0 20c1.7 0 2-1.3 1.3-2.4-.6-1-.2-2.6 1.4-2.6H17a5 5 0 0 0 5-5c0-5.5-4.5-10-10-10Z"/></svg>المظهر
+        </button>
+        <button data-view="members" data-owner>
+          <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/></svg>الأعضاء
+        </button>
       </nav>
 
       <div id="history" class="history">
@@ -68,6 +86,7 @@
         <ul id="conversations" class="conversations"></ul>
       </div>
 
+      <div id="me" class="me"></div>
       <div class="sidebar-foot">
         <a href="/api/export" class="foot-link">
           <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/></svg>تصدير
@@ -96,6 +115,11 @@
             <img src="/icon.svg" alt="" class="logo-xl">
             <h2>أهلاً، أقدر أساعدك في إيه؟</h2>
             <p class="muted">بختار أحسن موديل مجاني لكل رسالة، ولو واحد وقع بكمّل على اللي بعده.</p>
+            <div id="no-keys" class="setup-card glass" hidden>
+              <b>خطوة واحدة وتبدأ 🔑</b>
+              <span class="muted small">ضيف مفتاح مجاني واحد على الأقل (بياخد دقيقتين). كل استخدامك هيبقى من حدّك انت.</span>
+              <button class="btn-primary" data-go="keys">ضيف مفاتيحي</button>
+            </div>
             <div class="suggestions">
               <button class="chip" data-prompt="اشرحلي الفرق بين Riverpod و Bloc في Flutter بشكل مختصر">💡 Riverpod ولا Bloc؟</button>
               <button class="chip" data-prompt="اكتبلي رسالة إيميل محترمة أطلب فيها إجازة يومين">✉️ إيميل إجازة</button>
@@ -106,6 +130,7 @@
         </div>
 
         <div class="composer-wrap">
+          <div id="quick" class="quick" aria-label="اختصارات"></div>
           <form id="composer" class="composer glass">
             <textarea id="input" rows="1" dir="auto" placeholder="اكتب رسالتك…" required></textarea>
             <div class="composer-bar">
@@ -114,6 +139,9 @@
                 <select id="model-pick" aria-label="الموديل"><option value="auto">تلقائي</option></select>
               </label>
               <span class="hint">Enter للإرسال · Shift+Enter لسطر جديد</span>
+              <button id="mic" type="button" class="icon-btn mic" aria-label="اتكلم" title="اتكلم" hidden>
+                <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+              </button>
               <button id="send" type="submit" class="send" aria-label="إرسال">
                 <svg viewBox="0 0 24 24"><path d="M12 19V5m0 0-6 6m6-6 6 6"/></svg>
               </button>
@@ -133,17 +161,17 @@
           </div>
           <div class="segmented" role="tablist">
             <button id="tab-free" class="on" role="tab">مجاني</button>
-            <button id="tab-paid" role="tab">مدفوع 💎</button>
+            <button id="tab-paid" role="tab" data-owner>مدفوع 💎</button>
           </div>
         </div>
 
         <div id="free-pane" class="pane">
           <div class="row">
-            <button id="scan-now" class="btn-ghost">
+            <button id="scan-now" class="btn-ghost" data-owner>
               <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg>
               دوّر دلوقتي
             </button>
-            <span class="muted small">مش لازم — بيدوّر لوحده. ده لو عايز تشوف الجديد حالاً.</span>
+            <span class="muted small" data-owner>مش لازم — بيدوّر لوحده. ده لو عايز تشوف الجديد حالاً.</span>
           </div>
           <div id="stats" class="stats"></div>
           <p id="scan-result" class="toast" hidden></p>
@@ -191,6 +219,48 @@
           <button type="submit" class="btn-primary">حفظ</button>
         </form>
         <ul id="memory-list" class="list"></ul>
+      </section>
+
+      <section id="view-keys" class="view page" hidden>
+        <div class="page-head">
+          <div>
+            <h2>مفاتيحي</h2>
+            <p class="muted">مفاتيح مجانية من حساباتك انت. بتتخزّن متشفّرة، ومحدش يقدر يشوفها — ولا حتى صاحب الموقع.</p>
+          </div>
+        </div>
+        <div id="keys-list" class="keys"></div>
+        <p class="muted small">⚠️ استخدم مفاتيح من حسابات مجانية بس (من غير كارت ولا billing)، علشان عمرها ما تسحب فلوس.</p>
+      </section>
+
+      <section id="view-settings" class="view page" hidden>
+        <div class="page-head">
+          <div>
+            <h2>المظهر</h2>
+            <p class="muted">اختار الشكل اللي يريّحك — بيتحفظ على الجهاز ده.</p>
+          </div>
+        </div>
+        <div id="themes" class="themes"></div>
+        <h3>حجم الخط</h3>
+        <div class="segmented" id="font-size">
+          <button data-size="s">صغير</button>
+          <button data-size="m">عادي</button>
+          <button data-size="l">كبير</button>
+        </div>
+      </section>
+
+      <section id="view-members" class="view page" hidden>
+        <div class="page-head">
+          <div>
+            <h2>الأعضاء</h2>
+            <p class="muted">صحابك يدخلوا بحساب Google. كل واحد بمفاتيحه ومحادثاته — مش بيستهلك من حدّك.</p>
+          </div>
+        </div>
+        <p id="google-warning" class="toast warn-toast" hidden>تسجيل الدخول بـ Google لسه مش متفعّل — شوف الخطوات في README (قسم Google sign-in).</p>
+        <form id="invite-form" class="memory-form glass">
+          <input id="invite-email" type="email" dir="ltr" placeholder="friend@gmail.com" required>
+          <button type="submit" class="btn-primary">ادعي</button>
+        </form>
+        <ul id="members-list" class="list members"></ul>
       </section>
 
       <section id="view-activity" class="view page" hidden>

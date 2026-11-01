@@ -7,6 +7,7 @@ const base: ModelRow = {
   verified_at: null, tested_at: null, context_length: 32_000, supports_tools: 0, supports_vision: 0,
   arabic_ok: 1, quality: 50, latency_ms: 500, ok_count: 0, fail_count: 0, cooldown_until: 0,
   cooldown_strikes: 0, last_error: null, first_seen: 0, last_seen: 0, paid: 0, price_in: null, price_out: null,
+  score_code: null, score_reasoning: null, score_arabic: null, bench_at: null,
 };
 const model = (over: Partial<ModelRow>): ModelRow => ({ ...base, ...over });
 const req = { language: 'en' as const, task: 'general' as const, tokens: 1000, providerBonus: new Map<string, number>(), at: 1000 };
@@ -58,4 +59,18 @@ describe('cooldownMs', () => {
   it('honours Retry-After', () => expect(cooldownMs(0, 30, false)).toBe(30_000));
   it('backs off exponentially', () => expect(cooldownMs(3, null, false)).toBe(480_000));
   it('daily limits rest for 6 hours', () => expect(cooldownMs(0, null, true)).toBe(6 * 3600_000));
+});
+
+describe('measured task skill', () => {
+  it('a model that passed the code exam beats a bigger one that failed it', () => {
+    const out = rankModels([
+      model({ id: 'big', quality: 80, score_code: 0, score_reasoning: 100, score_arabic: 100 }),
+      model({ id: 'coder', quality: 55, score_code: 100, score_reasoning: 50, score_arabic: 100 }),
+    ], { ...req, task: 'code' }, 2);
+    expect(out[0]!.id).toBe('coder');
+  });
+  it('a model that failed the whole Arabic exam never gets Arabic', () => {
+    const out = rankModels([model({ id: 'en-only', score_arabic: 0 }), model({ id: 'ar' })], { ...req, language: 'ar' }, 2);
+    expect(out.map((m) => m.id)).toEqual(['ar']);
+  });
 });

@@ -1,6 +1,7 @@
 import { type Env, now } from './env';
 import { callProvider, configuredProviders, guessQuality, type Provider, providerById } from './providers';
 import { SCAN_EVERY_DAYS } from '../config/scan';
+import { benchSome } from './bench';
 import { setSettingStmt } from './paid';
 import type { ModelRow } from './router';
 
@@ -38,6 +39,7 @@ export async function quickTest(provider: Provider, env: Env, model: string): Pr
         max_tokens: 1024,
         temperature: 0,
       },
+      undefined,
       AbortSignal.timeout(TEST_TIMEOUT_MS),
     );
     const latencyMs = now() - started;
@@ -246,7 +248,13 @@ export async function scheduledScan(env: Env): Promise<ScanReport | null> {
     round = { startedAt: at, done: [] };
   }
   const provider = pending(round)[0];
-  if (!provider) return retestWaiting(env, providers); // round finished: use the hour for waiting models
+  if (!provider) {
+    // Round finished: use the hour for models still waiting a test, then for the task exam.
+    const retest = await retestWaiting(env, providers);
+    if (retest) return retest;
+    await benchSome(env, providers.map((p) => p.id));
+    return null;
+  }
   round.done.push(provider.id);
   await env.DB.batch([
     setSettingStmt(env, 'scan_round', JSON.stringify(round)),

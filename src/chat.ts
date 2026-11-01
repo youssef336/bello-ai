@@ -1,7 +1,9 @@
+import type { User } from './auth';
 import { type Env, newId, now, today } from './env';
+import { keysFor } from './keys';
 import { classifyTask, detectLanguage } from './lang';
 import { estimateCost, paidAllowedNow } from './paid';
-import { callProvider, configuredProviders, providerById } from './providers';
+import { callProvider, providerById } from './providers';
 import { cooldownMs, type ModelRow, rankModels } from './router';
 
 const HISTORY_CHARS = 24_000;
@@ -31,9 +33,10 @@ const words = (text: string): Set<string> =>
   new Set(text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 3));
 
 /** Pinned memories, then the ones sharing the most words with the message. Never all of them. */
-async function relevantMemories(env: Env, message: string): Promise<string[]> {
-  const rows = await env.DB.prepare('SELECT content, pinned FROM memories ORDER BY created_at DESC LIMIT 500')
-    .all<{ content: string; pinned: number }>();
+async function relevantMemories(env: Env, userId: string, message: string): Promise<string[]> {
+  const rows = await env.DB.prepare(
+    'SELECT content, pinned FROM memories WHERE user_id = ? ORDER BY created_at DESC LIMIT 500',
+  ).bind(userId).all<{ content: string; pinned: number }>();
   const query = words(message);
   const scored = rows.results
     .map((m) => {
@@ -72,37 +75,53 @@ function sse(event: string, data: unknown): Uint8Array {
 
 async function bumpUsage(
   env: Env,
+  userId: string,
   modelId: string,
   field: 'requests' | 'failures' | 'fallbacks',
   tokens = 0,
   cost = 0,
 ) {
   await env.DB.prepare(
-    `INSERT INTO usage (day, model_id, ${field}, tokens_est, cost_est) VALUES (?, ?, 1, ?, ?)
-     ON CONFLICT (day, model_id) DO UPDATE SET ${field} = ${field} + 1, tokens_est = tokens_est + ?,
+    `INSERT INTO usage (day, user_id, model_id, ${field}, tokens_est, cost_est) VALUES (?, ?, ?, 1, ?, ?)
+     ON CONFLICT (day, user_id, model_id) DO UPDATE SET ${field} = ${field} + 1, tokens_est = tokens_est + ?,
        cost_est = cost_est + ?`,
-  ).bind(today(), modelId, tokens, cost, tokens, cost).run();
+  ).bind(today(), userId, modelId, tokens, cost, tokens, cost).run();
 }
 
-/** Record a failed attempt and decide how long to skip the model. */
-async function markFailure(env: Env, m: ModelRow, status: number, body: string, retryAfter: string | null) {
+/**
+ * Record a failed attempt. Rate limits and key errors belong to this user's key, so the rest is
+ * per user; a model that is gone is gone for everyone.
+ */
+async function markFailure(
+  env: Env,
+  userId: string,
+  m: ModelRow,
+  status: number,
+  body: string,
+  retryAfter: string | null,
+) {
   const retry = retryAfter && /^\d+$/.test(retryAfter) ? Number(retryAfter) : null;
-  let until = 0;
-  let status_ = m.status;
-  if (status === 429) {
-    until = now() + cooldownMs(m.cooldown_strikes, retry, /per.?day|daily|RPD|TPD/i.test(body));
-  } else if (status === 404 || /decommission|deprecat|not found|does not exist/i.test(body)) {
-    status_ = 'failed';
-  } else if (status === 401 || status === 403) {
-    until = now() + 3600_000;
-  } else {
-    until = now() + 120_000;
+  const gone = status === 404 || /decommission|deprecat|not found|does not exist/i.test(body);
+  const rest =
+    status === 429
+      ? cooldownMs(m.cooldown_strikes, retry, /per.?day|daily|RPD|TPD/i.test(body))
+      : status === 401 || status === 403
+        ? 3600_000
+        : 120_000;
+  const stmts = [
+    env.DB.prepare(
+      `UPDATE models SET fail_count = fail_count + 1, last_error = ?,
+         status = CASE WHEN ? THEN 'failed' ELSE status END WHERE id = ?`,
+    ).bind(`HTTP ${status}: ${body.slice(0, 300)}`, gone ? 1 : 0, m.id),
+  ];
+  if (!gone) {
+    stmts.push(env.DB.prepare(
+      `INSERT INTO cooldowns (user_id, model_id, until, strikes) VALUES (?, ?, ?, ?)
+       ON CONFLICT (user_id, model_id) DO UPDATE SET until = excluded.until,
+         strikes = CASE WHEN ? = 429 THEN cooldowns.strikes + 1 ELSE cooldowns.strikes END`,
+    ).bind(userId, m.id, now() + rest, status === 429 ? 1 : 0, status));
   }
-  await env.DB.prepare(
-    `UPDATE models SET fail_count = fail_count + 1, cooldown_until = ?, status = ?, last_error = ?,
-       cooldown_strikes = CASE WHEN ? = 429 THEN cooldown_strikes + 1 ELSE cooldown_strikes END
-     WHERE id = ?`,
-  ).bind(until, status_, `HTTP ${status}: ${body.slice(0, 300)}`, status, m.id).run();
+  await env.DB.batch(stmts);
 }
 
 /**
@@ -110,20 +129,21 @@ async function markFailure(env: Env, m: ModelRow, status: number, body: string, 
  * token is put on cooldown and the next one takes over. Once text has started, there is no
  * silent switch: a mid-answer failure is reported, never stitched from two models.
  */
-export async function chat(env: Env, ctx: ExecutionContext, input: ChatInput): Promise<Response> {
+export async function chat(env: Env, ctx: ExecutionContext, user: User, input: ChatInput): Promise<Response> {
   const at = now();
-  if (input.regenerate) return regenerate(env, ctx, input);
+  if (input.regenerate) return regenerate(env, ctx, user, input);
   const message = input.message.trim();
   if (!message) return new Response('empty message', { status: 400 });
 
   let conversationId = input.conversationId;
   if (conversationId) {
-    const exists = await env.DB.prepare('SELECT 1 FROM conversations WHERE id = ?').bind(conversationId).first();
+    const exists = await env.DB.prepare('SELECT 1 FROM conversations WHERE id = ? AND user_id = ?')
+      .bind(conversationId, user.id).first();
     if (!exists) return new Response('conversation not found', { status: 404 });
   } else {
     conversationId = newId();
-    await env.DB.prepare('INSERT INTO conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)')
-      .bind(conversationId, message.replace(/\s+/g, ' ').slice(0, 60), at, at).run();
+    await env.DB.prepare('INSERT INTO conversations (id, user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+      .bind(conversationId, user.id, message.replace(/\s+/g, ' ').slice(0, 60), at, at).run();
   }
 
   const past = await env.DB.prepare(
@@ -133,13 +153,16 @@ export async function chat(env: Env, ctx: ExecutionContext, input: ChatInput): P
   await env.DB.prepare(
     'INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
   ).bind(userMessageId, conversationId, 'user', message, at).run();
-  return answer(env, ctx, input, conversationId, userMessageId, message, past.results.reverse(), at);
+  return answer(env, ctx, user, input, conversationId, userMessageId, message, past.results.reverse(), at);
 }
 
 /** Drop the answers after the last user message and answer it again. */
-async function regenerate(env: Env, ctx: ExecutionContext, input: ChatInput): Promise<Response> {
+async function regenerate(env: Env, ctx: ExecutionContext, user: User, input: ChatInput): Promise<Response> {
   const conversationId = input.conversationId;
   if (!conversationId) return new Response('conversation required', { status: 400 });
+  const mine = await env.DB.prepare('SELECT 1 FROM conversations WHERE id = ? AND user_id = ?')
+    .bind(conversationId, user.id).first();
+  if (!mine) return new Response('conversation not found', { status: 404 });
   const last = await env.DB.prepare(
     `SELECT id, content, created_at FROM messages WHERE conversation_id = ? AND role = 'user'
       ORDER BY created_at DESC LIMIT 1`,
@@ -151,12 +174,13 @@ async function regenerate(env: Env, ctx: ExecutionContext, input: ChatInput): Pr
     `SELECT role, content FROM messages WHERE conversation_id = ? AND created_at < ?
       ORDER BY created_at DESC LIMIT 60`,
   ).bind(conversationId, last.created_at).all<Turn>();
-  return answer(env, ctx, input, conversationId, last.id, last.content, past.results.reverse(), now());
+  return answer(env, ctx, user, input, conversationId, last.id, last.content, past.results.reverse(), now());
 }
 
 async function answer(
   env: Env,
   ctx: ExecutionContext,
+  user: User,
   input: ChatInput,
   conversationId: string,
   userMessageId: string,
@@ -164,7 +188,7 @@ async function answer(
   history: Turn[],
   at: number,
 ): Promise<Response> {
-  const memories = await relevantMemories(env, message);
+  const memories = await relevantMemories(env, user.id, message);
   const system = memories.length
     ? `${SYSTEM_PROMPT}\n\nWhat you know about the owner (use only when relevant):\n- ${memories.join('\n- ')}`
     : SYSTEM_PROMPT;
@@ -174,11 +198,19 @@ async function answer(
   ];
   const promptChars = turns.reduce((n, t) => n + t.content.length, 0);
 
-  const configured = new Set(configuredProviders(env).map((p) => p.id));
-  const all = await env.DB.prepare(`SELECT * FROM models WHERE status = 'active'`).all<ModelRow>();
-  // Paid models only with paid mode on and the monthly cap not reached — checked every message.
-  const paidOk = all.results.some((m) => m.paid) && (await paidAllowedNow(env));
-  const usable = all.results.filter((m) => configured.has(m.provider) && (!m.paid || paidOk));
+  // Only providers this user holds a key for: a member never spends the owner's limits.
+  const keys = await keysFor(env, user);
+  const [all, rests] = await Promise.all([
+    env.DB.prepare(`SELECT * FROM models WHERE status = 'active'`).all<ModelRow>(),
+    env.DB.prepare('SELECT model_id, until, strikes FROM cooldowns WHERE user_id = ?')
+      .bind(user.id).all<{ model_id: string; until: number; strikes: number }>(),
+  ]);
+  const rest = new Map(rests.results.map((r) => [r.model_id, r]));
+  // Paid models: the owner's credits, only with paid mode on and under the monthly cap.
+  const paidOk = user.role === 'owner' && all.results.some((m) => m.paid) && (await paidAllowedNow(env));
+  const usable = all.results
+    .filter((m) => keys.has(m.provider) && (!m.paid || paidOk))
+    .map((m) => ({ ...m, cooldown_until: rest.get(m.id)?.until ?? 0, cooldown_strikes: rest.get(m.id)?.strikes ?? 0 }));
 
   let candidates: ModelRow[];
   if (input.model && input.model !== 'auto') {
@@ -191,7 +223,7 @@ async function answer(
         language: detectLanguage(message),
         task: classifyTask(message),
         tokens: Math.ceil(promptChars / 3),
-        providerBonus: new Map(configuredProviders(env).map((p) => [p.id, p.bonus])),
+        providerBonus: new Map([...keys.keys()].map((id) => [id, providerById(id)?.bonus ?? 0])),
         at,
       },
       MAX_ATTEMPTS,
@@ -216,7 +248,9 @@ async function answer(
       await send('error', {
         message: usable.length
           ? 'Every free model is resting after a rate limit. Try again in a minute.'
-          : 'No active models yet. Open Models and press "Scan now".',
+          : keys.size === 0
+            ? 'Add at least one free API key in My keys (مفاتيحي) to start.'
+            : 'No active models yet. Open Models and press "Scan now".',
       });
       await writer.close().catch(() => {});
       return;
@@ -227,15 +261,15 @@ async function answer(
       const started = now();
       let res: Response;
       try {
-        res = await callProvider(provider, env, { model: m.model, messages: turns, stream: true });
+        res = await callProvider(provider, env, { model: m.model, messages: turns, stream: true }, keys.get(m.provider));
       } catch (e) {
-        await markFailure(env, m, 0, String(e), null);
-        await bumpUsage(env, m.id, 'failures');
+        await markFailure(env, user.id, m, 0, String(e), null);
+        await bumpUsage(env, user.id, m.id, 'failures');
         continue;
       }
       if (!res.ok || !res.body) {
-        await markFailure(env, m, res.status, await res.text().catch(() => ''), res.headers.get('retry-after'));
-        await bumpUsage(env, m.id, 'failures');
+        await markFailure(env, user.id, m, res.status, await res.text().catch(() => ''), res.headers.get('retry-after'));
+        await bumpUsage(env, user.id, m.id, 'failures');
         continue;
       }
 
@@ -274,14 +308,14 @@ async function answer(
       } catch (e) {
         broken = true;
         if (!text) {
-          await markFailure(env, m, 0, String(e), null);
-          await bumpUsage(env, m.id, 'failures');
+          await markFailure(env, user.id, m, 0, String(e), null);
+          await bumpUsage(env, user.id, m.id, 'failures');
           continue;
         }
       }
       if (!text) {
-        await markFailure(env, m, 0, 'empty answer', null);
-        await bumpUsage(env, m.id, 'failures');
+        await markFailure(env, user.id, m, 0, 'empty answer', null);
+        await bumpUsage(env, user.id, m.id, 'failures');
         continue;
       }
 
@@ -293,13 +327,14 @@ async function answer(
            VALUES (?, ?, 'assistant', ?, ?, ?)`,
         ).bind(assistantId, conversationId, text, m.id, now()),
         env.DB.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').bind(now(), conversationId),
+        env.DB.prepare('DELETE FROM cooldowns WHERE user_id = ? AND model_id = ?').bind(user.id, m.id),
         env.DB.prepare(
-          `UPDATE models SET ok_count = ok_count + 1, cooldown_strikes = 0,
+          `UPDATE models SET ok_count = ok_count + 1,
              latency_ms = CASE WHEN latency_ms IS NULL THEN ? ELSE (latency_ms * 4 + ?) / 5 END
            WHERE id = ?`,
         ).bind(latency, latency, m.id),
       ]);
-      await bumpUsage(env, m.id, index > 0 ? 'fallbacks' : 'requests', Math.ceil((promptChars + text.length) / 4),
+      await bumpUsage(env, user.id, m.id, index > 0 ? 'fallbacks' : 'requests', Math.ceil((promptChars + text.length) / 4),
         m.paid ? estimateCost(m.price_in, m.price_out, promptChars, text.length) : 0);
       if (broken) await send('error', { message: 'The answer was cut off by the provider.' });
       await send('done', { messageId: assistantId });
