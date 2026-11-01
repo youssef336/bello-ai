@@ -116,13 +116,53 @@
         <div class="page-head">
           <div>
             <h2>الموديلات</h2>
-            <p class="muted">Scan تلقائي كل 3 ساعات — أي موديل مجاني جديد بيتجرّب ويتضاف لوحده.</p>
+            <p id="auto-scan" class="muted">…</p>
           </div>
-          <div id="scan-buttons" class="row"></div>
+          <div class="segmented" role="tablist">
+            <button id="tab-free" class="on" role="tab">مجاني</button>
+            <button id="tab-paid" role="tab">مدفوع 💎</button>
+          </div>
         </div>
-        <div id="stats" class="stats"></div>
-        <p id="scan-result" class="toast" hidden></p>
-        <div id="models-grid" class="cards"></div>
+
+        <div id="free-pane" class="pane">
+          <div class="row">
+            <button id="scan-now" class="btn-ghost">
+              <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg>
+              دوّر دلوقتي
+            </button>
+            <span class="muted small">مش لازم — بيدوّر لوحده. ده لو عايز تشوف الجديد حالاً.</span>
+          </div>
+          <div id="stats" class="stats"></div>
+          <p id="scan-result" class="toast" hidden></p>
+          <div id="models-grid" class="cards"></div>
+        </div>
+
+        <div id="paid-pane" class="pane" hidden>
+          <div class="paid-top">
+            <div class="wallet glass">
+              <span class="muted small">رصيد OpenRouter</span>
+              <b id="balance">—</b>
+              <span id="spent" class="muted small"></span>
+              <a class="btn-primary" href="https://openrouter.ai/settings/credits" target="_blank" rel="noopener noreferrer">اشحن رصيد</a>
+            </div>
+            <div class="wallet glass">
+              <label class="toggle big"><input id="paid-mode" type="checkbox"><span></span>استخدم الموديلات المدفوعة</label>
+              <label class="cap">حد أقصى في الشهر $<input id="paid-cap" type="number" min="0" max="1000" step="1"></label>
+              <span class="muted small">رصيد واحد بيشغّل Claude و GPT و Gemini Pro وغيرهم. لما الرصيد أو الحد يخلص بيرجع للمجاني لوحده — عمره ما يسحب فلوس من غير ما تشحن.</span>
+            </div>
+          </div>
+          <div class="row filters">
+            <input id="paid-search" dir="ltr" placeholder="ابحث: claude, gpt, gemini…">
+            <select id="paid-sort" aria-label="ترتيب">
+              <option value="popular">الأشهر</option>
+              <option value="cheap">الأرخص</option>
+              <option value="expensive">الأغلى</option>
+              <option value="allowed">المسموح بيها</option>
+            </select>
+          </div>
+          <p class="muted small" id="paid-note"></p>
+          <div class="table-wrap panel glass"><table id="paid-table"></table></div>
+        </div>
       </section>
 
       <section id="view-memory" class="view page" hidden>

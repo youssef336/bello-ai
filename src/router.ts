@@ -22,6 +22,9 @@ export interface ModelRow {
   last_error: string | null;
   first_seen: number;
   last_seen: number;
+  paid: number;
+  price_in: number | null;
+  price_out: number | null;
 }
 
 export interface RouteRequest {

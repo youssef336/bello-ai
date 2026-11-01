@@ -1,5 +1,7 @@
 import { type Env, now } from './env';
 import { callProvider, configuredProviders, guessQuality, type Provider, providerById } from './providers';
+import { SCAN_EVERY_DAYS } from '../config/scan';
+import { setSettingStmt } from './paid';
 import type { ModelRow } from './router';
 
 const DAY = 24 * 3600_000;
@@ -93,7 +95,11 @@ export interface ScanReport {
  * Scan one provider: register new free models, test candidates, retire models the provider
  * dropped. New models that pass the quick test become active right away (auto-add).
  */
-export async function scanProvider(env: Env, provider: Provider): Promise<ScanReport> {
+export async function scanProvider(
+  env: Env,
+  provider: Provider,
+  source: 'auto' | 'manual' = 'manual',
+): Promise<ScanReport> {
   const report: ScanReport = { provider: provider.id, found: 0, added: [], removed: [], failed: [], paid: [] };
   const key = provider.keyOf(env);
   if (!key) return { ...report, error: 'no API key' };
@@ -109,7 +115,7 @@ export async function scanProvider(env: Env, provider: Provider): Promise<ScanRe
   report.found = found.length;
   const at = now();
 
-  const existing = await env.DB.prepare('SELECT * FROM models WHERE provider = ?')
+  const existing = await env.DB.prepare('SELECT * FROM models WHERE provider = ? AND paid = 0')
     .bind(provider.id)
     .all<ModelRow>();
   const known = new Map(existing.results.map((m) => [m.id, m]));
@@ -151,7 +157,7 @@ export async function scanProvider(env: Env, provider: Provider): Promise<ScanRe
 
   // Candidates first, then failed models a day later, then paid ones a week later (free tiers change).
   const toTest = await env.DB.prepare(
-    `SELECT * FROM models WHERE provider = ? AND (
+    `SELECT * FROM models WHERE provider = ? AND paid = 0 AND (
         status = 'candidate'
         OR (status = 'failed' AND COALESCE(tested_at, 0) < ?)
         OR (status = 'paid' AND COALESCE(tested_at, 0) < ?))
@@ -196,23 +202,51 @@ export async function scanProvider(env: Env, provider: Provider): Promise<ScanRe
     if (stmts.length) await env.DB.batch(stmts);
   }
   await logEvent(env, 'scan', null,
-    `${provider.id}: ${report.found} free, +${report.added.length} added, -${report.removed.length} removed` +
+    `${source === 'auto' ? '[auto] ' : ''}${provider.id}: ${report.found} free, +${report.added.length} added, -${report.removed.length} removed` +
       (report.error ? ` · ${report.error}` : ''));
   return report;
 }
 
-/** Cron: one provider per run (round-robin) so a run never hits the subrequest or CPU caps. */
+interface ScanRound {
+  startedAt: number;
+  done: string[];
+}
+
+/** When the next scan happens: next hour while a round is running, else the next round start. */
+export function nextScanAt(round: ScanRound | null, providers: string[], at: number): number {
+  const nextHour = Math.ceil((at + 1) / 3600_000) * 3600_000;
+  if (!round || providers.some((p) => !round.done.includes(p))) return nextHour;
+  const due = round.startedAt + SCAN_EVERY_DAYS * DAY;
+  return Math.max(nextHour, Math.ceil(due / 3600_000) * 3600_000);
+}
+
+export async function loadRound(env: Env): Promise<ScanRound | null> {
+  const row = await env.DB.prepare(`SELECT value FROM settings WHERE key = 'scan_round'`).first<{ value: string }>();
+  return row ? (JSON.parse(row.value) as ScanRound) : null;
+}
+
+/**
+ * Cron, every hour. A round scans each provider once, one per hour (keeps every run under the
+ * free plan's subrequest and CPU caps). A new round starts SCAN_EVERY_DAYS after the last one.
+ */
 export async function scheduledScan(env: Env): Promise<ScanReport | null> {
   const providers = configuredProviders(env);
   if (!providers.length) return null;
-  const row = await env.DB.prepare(`SELECT value FROM settings WHERE key = 'discovery_cursor'`)
-    .first<{ value: string }>();
-  const cursor = Number(row?.value ?? 0) % providers.length;
-  await env.DB.prepare(
-    `INSERT INTO settings (key, value) VALUES ('discovery_cursor', ?)
-     ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
-  ).bind(String(cursor + 1)).run();
-  return scanProvider(env, providers[cursor]!);
+  const at = now();
+  let round = await loadRound(env);
+  const pending = (r: ScanRound | null) => providers.filter((p) => !r?.done.includes(p.id));
+
+  if (!round || (pending(round).length === 0 && at - round.startedAt >= SCAN_EVERY_DAYS * DAY)) {
+    round = { startedAt: at, done: [] };
+  }
+  const provider = pending(round)[0];
+  if (!provider) return null; // round finished, waiting for the next one
+  round.done.push(provider.id);
+  await env.DB.batch([
+    setSettingStmt(env, 'scan_round', JSON.stringify(round)),
+    setSettingStmt(env, 'last_cron', JSON.stringify({ at, provider: provider.id })),
+  ]);
+  return scanProvider(env, provider, 'auto');
 }
 
 export async function scanById(env: Env, providerId: string): Promise<ScanReport | null> {

@@ -1,4 +1,5 @@
 import type { Env } from './env';
+import { savePaidCatalog } from './paid';
 import { callWorkersAi, discoverWorkersAi } from './workers-ai';
 
 /**
@@ -153,8 +154,10 @@ export const PROVIDERS: Provider[] = [
     freeBasis: 'catalog',
     bonus: 0,
     extraHeaders: { 'X-Title': 'Bello AI' },
-    discover: async () => {
+    discover: async (_key, env) => {
       const list = await getJson<{ data: OpenRouterModel[] }>('https://openrouter.ai/api/v1/models');
+      // Same catalog carries every paid model's price: keep it for the paid models page.
+      await savePaidCatalog(env, list.data);
       return list.data.filter(isOpenRouterFree).map((m) => ({
         model: m.id,
         name: m.name,

@@ -15,8 +15,12 @@ hits its limit, and **adds new free models by itself** as soon as a provider pub
   measured reliability and speed. Arabic never goes to a model that failed the Arabic test.
 - **Fallback**: a model that returns 429/5xx before its first word rests (Retry-After, else
   1 → 2 → 4 min … up to 6 h) and the next model answers. Up to 4 tries per message.
-- **Auto-discovery** every 3 hours (one provider per run): new free models are quick-tested with an
-  Arabic question and switched on if they pass. Models the provider drops are marked removed.
+- **Auto-discovery** every 2 days by default — change it in [`config/scan.ts`](config/scan.ts). New free
+  models are quick-tested with an Arabic question and switched on if they pass. Models the provider
+  drops are marked removed.
+- **Paid models, off by default**: the models page lists every paid model with its price per 1M
+  tokens. Top up OpenRouter credits, switch paid mode on, allow the models you want, set a monthly
+  cap. Empty credits or a reached cap → back to free models; it never spends without credits.
 - **Memory**: notes about you; pinned ones always go in, the rest only when they match the message.
 - **Owner-only**: one password (PBKDF2, 100k rounds), HttpOnly SameSite=Strict session, 5 tries per
   IP per 15 min, same-origin check, strict CSP. Provider keys live only in Worker secrets.
@@ -54,7 +58,7 @@ npm run db:migrate:local
 npm run dev                                   # http://localhost:8787
 ```
 
-Then open **الموديلات → Scan** for each provider once (after that the cron does it).
+Then open **الموديلات → دوّر دلوقتي** once (after that the schedule in `config/scan.ts` does it).
 
 ## Deploy (free, ~10 minutes, once)
 

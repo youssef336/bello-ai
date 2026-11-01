@@ -1,7 +1,17 @@
 import { cleanupAuth, isAuthenticated, login, logout } from './auth';
 import { chat } from './chat';
-import { scanById, scheduledScan } from './discovery';
+import { SCAN_EVERY_DAYS } from '../config/scan';
+import { loadRound, nextScanAt, scanById, scheduledScan } from './discovery';
 import { type Env, error, json, newId, now } from './env';
+import {
+  allowPaidModel,
+  disallowPaidModel,
+  loadPaidCatalog,
+  monthSpend,
+  openRouterCredits,
+  paidSettings,
+  setSettingStmt,
+} from './paid';
 import { configuredProviders, PROVIDERS } from './providers';
 
 type Handler = (req: Request, env: Env, ctx: ExecutionContext, params: string[]) => Promise<Response>;
@@ -112,6 +122,52 @@ const routes: [string, RegExp, Handler][] = [
   ['DELETE', /^\/api\/memories\/([\w-]+)$/, async (_r, env, _c, [id]) => {
     await env.DB.prepare('DELETE FROM memories WHERE id = ?').bind(id).run();
     return json({ ok: true });
+  }],
+
+  ['GET', /^\/api\/status$/, async (_r, env) => {
+    const [row, round] = await Promise.all([
+      env.DB.prepare(`SELECT value FROM settings WHERE key = 'last_cron'`).first<{ value: string }>(),
+      loadRound(env),
+    ]);
+    const providers = configuredProviders(env).map((p) => p.id);
+    return json({
+      lastCron: row ? JSON.parse(row.value) : null,
+      nextScanAt: nextScanAt(round, providers, now()),
+      everyDays: SCAN_EVERY_DAYS,
+    });
+  }],
+
+  ['GET', /^\/api\/paid$/, async (_r, env) => {
+    const [settings, spent, credits, catalog, allowed] = await Promise.all([
+      paidSettings(env),
+      monthSpend(env),
+      openRouterCredits(env),
+      loadPaidCatalog(env),
+      env.DB.prepare('SELECT model FROM models WHERE paid = 1').all<{ model: string }>(),
+    ]);
+    return json({ settings, spent, credits, catalog, allowed: allowed.results.map((r) => r.model) });
+  }],
+
+  ['POST', /^\/api\/paid\/settings$/, async (req, env) => {
+    const { mode, capUsd } = await req.json<{ mode?: string; capUsd?: number }>();
+    const stmts: D1PreparedStatement[] = [];
+    if (mode === 'on' || mode === 'off') stmts.push(setSettingStmt(env, 'paid_mode', mode));
+    if (typeof capUsd === 'number' && capUsd >= 0 && capUsd <= 1000) {
+      stmts.push(setSettingStmt(env, 'paid_cap_usd', String(capUsd)));
+    }
+    if (!stmts.length) return error(400, 'nothing to change');
+    await env.DB.batch(stmts);
+    return json(await paidSettings(env));
+  }],
+
+  ['POST', /^\/api\/paid\/(allow|disallow)$/, async (req, env, _c, [action]) => {
+    const { model } = await req.json<{ model?: string }>();
+    if (typeof model !== 'string') return error(400, 'model required');
+    if (action === 'disallow') {
+      await disallowPaidModel(env, model);
+      return json({ ok: true });
+    }
+    return (await allowPaidModel(env, model)) ? json({ ok: true }) : error(404, 'not in the price list');
   }],
 
   ['GET', /^\/api\/export$/, async (_r, env) => {

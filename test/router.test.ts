@@ -6,7 +6,7 @@ const base: ModelRow = {
   id: 'p:m', provider: 'p', model: 'm', name: 'm', status: 'active', free_evidence: null,
   verified_at: null, tested_at: null, context_length: 32_000, supports_tools: 0, supports_vision: 0,
   arabic_ok: 1, quality: 50, latency_ms: 500, ok_count: 0, fail_count: 0, cooldown_until: 0,
-  cooldown_strikes: 0, last_error: null, first_seen: 0, last_seen: 0,
+  cooldown_strikes: 0, last_error: null, first_seen: 0, last_seen: 0, paid: 0, price_in: null, price_out: null,
 };
 const model = (over: Partial<ModelRow>): ModelRow => ({ ...base, ...over });
 const req = { language: 'en' as const, task: 'general' as const, tokens: 1000, providerBonus: new Map<string, number>(), at: 1000 };

@@ -290,7 +290,7 @@ async function loadModelPicker() {
   const resting = active.filter((m) => m.cooldown_until > Date.now()).length;
   $('model-pick').replaceChildren(
     el('option', { value: 'auto' }, 'تلقائي'),
-    ...active.map((m) => el('option', { value: m.id }, m.name)),
+    ...active.map((m) => el('option', { value: m.id }, m.paid ? `💎 ${m.name}` : m.name)),
   );
   const pill = $('status-pill');
   pill.className = `pill ${active.length - resting > 0 ? 'ok' : 'warn'}`;
@@ -422,35 +422,51 @@ function toast(text) {
   $('scan-result').hidden = !text;
 }
 
-async function loadModels() {
-  const [models, providers] = await Promise.all([api('/api/models'), api('/api/providers')]);
-  const now = Date.now();
-  $('scan-buttons').replaceChildren(
-    ...providers.map((p) =>
-      el('button', {
-        class: 'btn-ghost',
-        disabled: !p.configured,
-        title: p.configured ? `دوّر على موديلات جديدة في ${p.label}` : 'مفيش API key',
-        onclick: async (e) => {
-          const btn = e.currentTarget;
-          btn.disabled = true;
-          toast(`بيدوّر في ${p.label}…`);
-          try {
-            const r = await api(`/api/discovery/${p.id}`, { method: 'POST' });
-            toast(r.error
-              ? `${p.label}: ${r.error}`
-              : `${p.label}: ${r.found} مجاني · اتضاف ${r.added.length} · فشل ${r.failed.length} · مدفوع ${r.paid.length} · اتشال ${r.removed.length}`);
-          } catch (err) {
-            toast(err.message);
-          }
-          btn.disabled = false;
-          loadModels();
-          loadModelPicker();
-        },
-      }, `Scan ${p.label}`),
-    ),
-  );
+const everyText = (d) => (d === 1 ? 'كل يوم' : d === 2 ? 'كل يومين' : d < 1 ? `كل ${Math.round(d * 24)} ساعة` : `كل ${d} أيام`);
 
+async function loadAutoScan() {
+  const st = await api('/api/status');
+  const next = new Date(st.nextScanAt).toLocaleString([], { weekday: 'long', hour: '2-digit', minute: '2-digit' });
+  $('auto-scan').textContent = st.lastCron
+    ? `🟢 بيدوّر لوحده ${everyText(st.everyDays)} · آخر مرة ${ago(st.lastCron.at)} (${st.lastCron.provider}) · الجاية ${next}`
+    : `⏳ بيدوّر لوحده ${everyText(st.everyDays)} · أول مرة ${next}`;
+}
+
+$('tab-free').addEventListener('click', () => switchModelsTab('free'));
+$('tab-paid').addEventListener('click', () => switchModelsTab('paid'));
+function switchModelsTab(tab) {
+  $('tab-free').classList.toggle('on', tab === 'free');
+  $('tab-paid').classList.toggle('on', tab === 'paid');
+  $('free-pane').hidden = tab !== 'free';
+  $('paid-pane').hidden = tab !== 'paid';
+  if (tab === 'paid') loadPaid();
+}
+
+$('scan-now').addEventListener('click', async () => {
+  const btn = $('scan-now');
+  btn.disabled = true;
+  const providers = (await api('/api/providers')).filter((p) => p.configured);
+  let added = 0;
+  for (const p of providers) {
+    toast(`بيدوّر في ${p.label}…`);
+    try {
+      const r = await api(`/api/discovery/${p.id}`, { method: 'POST' });
+      added += r.added.length;
+    } catch {
+      // One provider failing must not stop the others.
+    }
+  }
+  toast(added ? `✨ اتضاف ${added} موديل جديد` : 'مفيش جديد دلوقتي — كله متحدّث');
+  btn.disabled = false;
+  loadModels();
+  loadModelPicker();
+});
+
+async function loadModels() {
+  loadAutoScan();
+  const [all, providers] = await Promise.all([api('/api/models'), api('/api/providers')]);
+  const models = all.filter((m) => !m.paid);
+  const now = Date.now();
   const active = models.filter((m) => m.status === 'active');
   const arabic = active.filter((m) => m.arabic_ok === 1).length;
   const resting = active.filter((m) => m.cooldown_until > now).length;
@@ -504,6 +520,70 @@ async function loadModels() {
   // CSP forbids inline style attributes, so widths are set through the CSSOM.
   for (const bar of document.querySelectorAll('.bar i')) bar.style.width = `${bar.dataset.q}%`;
 }
+
+// --- Paid models ---------------------------------------------------------------------------
+
+const paid = { data: null };
+const usd = (n) => (n === 0 ? '$0' : n >= 0.1 ? `$${n.toFixed(2)}` : `$${n.toFixed(3)}`);
+// The names people look for first; everything else follows.
+const FEATURED = ['anthropic', 'openai', 'google', 'x-ai', 'deepseek', 'moonshotai', 'qwen', 'mistralai', 'meta-llama', 'z-ai'];
+const rank = (m) => { const i = FEATURED.indexOf(m.vendor); return i === -1 ? FEATURED.length : i; };
+
+async function loadPaid() {
+  paid.data = await api('/api/paid');
+  const { settings, spent, credits, catalog } = paid.data;
+  $('balance').textContent = credits ? usd(Math.max(0, credits.total - credits.used)) : '—';
+  $('spent').textContent = `صرفت الشهر ده تقريباً ${usd(spent)} من ${usd(settings.capUsd)}`;
+  $('paid-mode').checked = settings.mode === 'on';
+  $('paid-cap').value = String(settings.capUsd);
+  $('paid-note').textContent = `${catalog.models.length} موديل · الأسعار بالدولار لكل مليون توكن (≈ 750 ألف كلمة) · اتحدّثت ${catalog.updatedAt ? ago(catalog.updatedAt) : '—'}`;
+  renderPaid();
+}
+
+function renderPaid() {
+  if (!paid.data) return;
+  const q = $('paid-search').value.trim().toLowerCase();
+  const allowed = new Set(paid.data.allowed);
+  let rows = paid.data.catalog.models.filter((m) => m.out > 0 && (!q || `${m.id} ${m.name}`.toLowerCase().includes(q)));
+  const sort = $('paid-sort').value;
+  if (sort === 'popular') rows = [...rows].sort((a, b) => rank(a) - rank(b) || b.out - a.out);
+  if (sort === 'expensive') rows = [...rows].sort((a, b) => b.out - a.out);
+  if (sort === 'allowed') rows = rows.filter((m) => allowed.has(m.id));
+  $('paid-table').replaceChildren(
+    el('tr', {}, ...['الموديل', 'الشركة', 'دخل / 1M', 'خرج / 1M', 'السياق', ''].map((h) => el('th', {}, h))),
+    ...rows.slice(0, 200).map((m) =>
+      el('tr', { class: allowed.has(m.id) ? 'allowed' : '' },
+        el('td', { dir: 'ltr' }, m.name, m.vision ? ' 🖼️' : ''),
+        el('td', { dir: 'ltr', class: 'muted' }, m.vendor),
+        el('td', {}, usd(m.in)),
+        el('td', {}, usd(m.out)),
+        el('td', {}, m.context ? `${Math.round(m.context / 1000)}k` : '—'),
+        el('td', {},
+          el('button', {
+            class: allowed.has(m.id) ? 'btn-ghost on' : 'btn-ghost',
+            onclick: async () => {
+              const action = allowed.has(m.id) ? 'disallow' : 'allow';
+              await api(`/api/paid/${action}`, { method: 'POST', body: JSON.stringify({ model: m.id }) });
+              await loadPaid();
+              loadModelPicker();
+            },
+          }, allowed.has(m.id) ? '✓ مسموح' : 'اسمح'),
+        ),
+      ),
+    ),
+  );
+}
+
+$('paid-search').addEventListener('input', renderPaid);
+$('paid-sort').addEventListener('change', renderPaid);
+$('paid-mode').addEventListener('change', async () => {
+  await api('/api/paid/settings', { method: 'POST', body: JSON.stringify({ mode: $('paid-mode').checked ? 'on' : 'off' }) });
+  loadPaid();
+});
+$('paid-cap').addEventListener('change', async () => {
+  await api('/api/paid/settings', { method: 'POST', body: JSON.stringify({ capUsd: Number($('paid-cap').value) }) });
+  loadPaid();
+});
 
 // --- Memory --------------------------------------------------------------------------------
 

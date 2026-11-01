@@ -1,5 +1,6 @@
 import { type Env, newId, now, today } from './env';
 import { classifyTask, detectLanguage } from './lang';
+import { estimateCost, paidAllowedNow } from './paid';
 import { callProvider, configuredProviders, providerById } from './providers';
 import { cooldownMs, type ModelRow, rankModels } from './router';
 
@@ -67,11 +68,18 @@ function sse(event: string, data: unknown): Uint8Array {
   return new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
-async function bumpUsage(env: Env, modelId: string, field: 'requests' | 'failures' | 'fallbacks', tokens = 0) {
+async function bumpUsage(
+  env: Env,
+  modelId: string,
+  field: 'requests' | 'failures' | 'fallbacks',
+  tokens = 0,
+  cost = 0,
+) {
   await env.DB.prepare(
-    `INSERT INTO usage (day, model_id, ${field}, tokens_est) VALUES (?, ?, 1, ?)
-     ON CONFLICT (day, model_id) DO UPDATE SET ${field} = ${field} + 1, tokens_est = tokens_est + ?`,
-  ).bind(today(), modelId, tokens, tokens).run();
+    `INSERT INTO usage (day, model_id, ${field}, tokens_est, cost_est) VALUES (?, ?, 1, ?, ?)
+     ON CONFLICT (day, model_id) DO UPDATE SET ${field} = ${field} + 1, tokens_est = tokens_est + ?,
+       cost_est = cost_est + ?`,
+  ).bind(today(), modelId, tokens, cost, tokens, cost).run();
 }
 
 /** Record a failed attempt and decide how long to skip the model. */
@@ -135,7 +143,9 @@ export async function chat(env: Env, ctx: ExecutionContext, input: ChatInput): P
 
   const configured = new Set(configuredProviders(env).map((p) => p.id));
   const all = await env.DB.prepare(`SELECT * FROM models WHERE status = 'active'`).all<ModelRow>();
-  const usable = all.results.filter((m) => configured.has(m.provider));
+  // Paid models only with paid mode on and the monthly cap not reached — checked every message.
+  const paidOk = all.results.some((m) => m.paid) && (await paidAllowedNow(env));
+  const usable = all.results.filter((m) => configured.has(m.provider) && (!m.paid || paidOk));
 
   let candidates: ModelRow[];
   if (input.model && input.model !== 'auto') {
@@ -256,7 +266,8 @@ export async function chat(env: Env, ctx: ExecutionContext, input: ChatInput): P
            WHERE id = ?`,
         ).bind(latency, latency, m.id),
       ]);
-      await bumpUsage(env, m.id, index > 0 ? 'fallbacks' : 'requests', Math.ceil((promptChars + text.length) / 4));
+      await bumpUsage(env, m.id, index > 0 ? 'fallbacks' : 'requests', Math.ceil((promptChars + text.length) / 4),
+        m.paid ? estimateCost(m.price_in, m.price_out, promptChars, text.length) : 0);
       if (broken) await send('error', { message: 'The answer was cut off by the provider.' });
       await send('done', { messageId: assistantId });
       await writer.close().catch(() => {});

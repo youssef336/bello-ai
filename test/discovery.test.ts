@@ -18,3 +18,15 @@ describe('classifyFailure', () => {
   it('empty answers fail', () => expect(classifyFailure(fail('empty answer'))).toBe('failed'));
   it('paid wins', () => expect(classifyFailure(fail('HTTP 429: limit: 0', true))).toBe('paid'));
 });
+
+import { nextScanAt } from '../src/discovery';
+import { SCAN_EVERY_DAYS } from '../config/scan';
+
+describe('nextScanAt', () => {
+  const H = 3600_000;
+  it('next hour when no round has run', () => expect(nextScanAt(null, ['a'], 10 * H + 5)).toBe(11 * H));
+  it('next hour while a round is still going', () =>
+    expect(nextScanAt({ startedAt: 0, done: ['a'] }, ['a', 'b'], 2 * H)).toBe(3 * H));
+  it('waits the configured days after a finished round', () =>
+    expect(nextScanAt({ startedAt: 0, done: ['a', 'b'] }, ['a', 'b'], 3 * H)).toBe(SCAN_EVERY_DAYS * 24 * H));
+});

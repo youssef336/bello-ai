@@ -18,7 +18,7 @@
       "migrations_dir": "migrations"
     }
   ],
-  // Discovery: every 3 hours one provider is scanned (round-robin), so each run stays small.
-  "triggers": { "crons": ["0 */3 * * *"] },
+  // Hourly wake-up for discovery. How often it really scans is in config/scan.ts.
+  "triggers": { "crons": ["0 * * * *"] },
   "observability": { "enabled": true }
 }
