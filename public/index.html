@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Bello AI</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <section id="login" class="login" hidden>
+    <form id="login-form" class="card">
+      <h1>Bello AI</h1>
+      <p class="muted">مساعدك الشخصي — كل الموديلات المجانية في مكان واحد</p>
+      <input id="password" type="password" autocomplete="current-password" placeholder="كلمة السر" required>
+      <button type="submit">دخول</button>
+      <p id="login-error" class="error" hidden></p>
+    </form>
+  </section>
+
+  <div id="app" class="app" hidden>
+    <aside id="sidebar" class="sidebar">
+      <div class="brand">Bello AI</div>
+      <button id="new-chat" class="primary">+ محادثة جديدة</button>
+      <nav class="tabs">
+        <button data-view="chat" class="active">المحادثات</button>
+        <button data-view="models">الموديلات</button>
+        <button data-view="memory">الذاكرة</button>
+        <button data-view="activity">النشاط</button>
+      </nav>
+      <ul id="conversations" class="conversations"></ul>
+      <div class="sidebar-foot">
+        <a href="/api/export" class="link">تصدير كل البيانات</a>
+        <button id="logout" class="link">خروج</button>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <button id="menu" class="icon" aria-label="القائمة">☰</button>
+        <span id="title" class="title">محادثة جديدة</span>
+      </header>
+
+      <section id="view-chat" class="view">
+        <div id="messages" class="messages">
+          <div id="empty" class="empty">
+            <h2>أهلاً 👋</h2>
+            <p class="muted">اكتب أي حاجة بالعربي أو الإنجليزي — Bello هيختار أحسن موديل مجاني متاح.</p>
+          </div>
+        </div>
+        <form id="composer" class="composer">
+          <select id="model-pick" aria-label="الموديل"><option value="auto">تلقائي</option></select>
+          <textarea id="input" rows="1" dir="auto" placeholder="اكتب رسالتك…" required></textarea>
+          <button id="send" type="submit" class="primary">إرسال</button>
+          <button id="stop" type="button" hidden>إيقاف</button>
+        </form>
+      </section>
+
+      <section id="view-models" class="view" hidden>
+        <div class="toolbar">
+          <p class="muted">بيتعمل scan تلقائي كل 3 ساعات. أي موديل مجاني جديد بيتجرّب ويتضاف لوحده.</p>
+          <div id="scan-buttons" class="row"></div>
+        </div>
+        <p id="scan-result" class="muted"></p>
+        <div class="table-wrap"><table id="models-table"></table></div>
+      </section>
+
+      <section id="view-memory" class="view" hidden>
+        <form id="memory-form" class="row">
+          <input id="memory-input" dir="auto" maxlength="2000" placeholder="حاجة عايز Bello يفتكرها عنك…" required>
+          <label class="check"><input id="memory-pinned" type="checkbox"> دايماً</label>
+          <button type="submit" class="primary">حفظ</button>
+        </form>
+        <ul id="memory-list" class="list"></ul>
+      </section>
+
+      <section id="view-activity" class="view" hidden>
+        <h3>الاستخدام (آخر 7 أيام)</h3>
+        <div class="table-wrap"><table id="usage-table"></table></div>
+        <h3>سجل الاكتشاف</h3>
+        <ul id="events" class="list"></ul>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

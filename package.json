@@ -1,0 +1,22 @@
+{
+  "name": "bello-ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Personal AI assistant that routes every request to the best free model and adds new free models by itself.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply bello-ai --local",
+    "db:migrate:remote": "wrangler d1 migrations apply bello-ai --remote",
+    "hash-password": "node scripts/hash-password.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261023.1",
+    "typescript": "^5.6.0",
+    "vitest": "^3.2.0",
+    "wrangler": "^4.150.0"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "bello-ai",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "bello-ai",
+      // Replace with the id printed by: npx wrangler d1 create bello-ai
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // Discovery: every 3 hours one provider is scanned (round-robin), so each run stays small.
+  "triggers": { "crons": ["0 */3 * * *"] },
+  "observability": { "enabled": true }
+}

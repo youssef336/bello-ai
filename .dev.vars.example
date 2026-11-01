@@ -1,0 +1,8 @@
+# Copy to .dev.vars for `npm run dev`. In production use `npx wrangler secret put NAME`.
+# Generate with: npm run hash-password -- "your password"
+OWNER_PASSWORD_HASH=
+# Only keys from FREE plans (no billing attached). Leave a key empty to switch that provider off.
+GROQ_API_KEY=
+OPENROUTER_API_KEY=
+GEMINI_API_KEY=
+CEREBRAS_API_KEY=
