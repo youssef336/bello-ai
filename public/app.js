@@ -36,6 +36,7 @@ const ICONS = {
   trash: '<path d="M4 7h16M10 11v6M14 11v6M5 7l1 13h12l1-13M9 7V4h6v3"/>',
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
   pin: '<path d="M12 17v5M5 17h14l-2-4V5H7v8z"/>',
+  redo: '<path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/>',
 };
 const icon = (name) => {
   const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -51,6 +52,26 @@ const ago = (ms) => {
   if (s < 86400) return `من ${Math.round(s / 3600)} س`;
   return new Date(ms).toLocaleDateString();
 };
+
+// --- Dialog and toasts --------------------------------------------------------------------
+
+function confirmDialog(title, text, ok = 'امسح') {
+  const dialog = $('confirm-dialog');
+  $('confirm-title').textContent = title;
+  $('confirm-text').textContent = text;
+  $('confirm-ok').textContent = ok;
+  dialog.showModal();
+  return new Promise((resolve) => {
+    dialog.addEventListener('close', () => resolve(dialog.returnValue === 'ok'), { once: true });
+  });
+}
+
+function notify(text) {
+  const t = el('div', { class: 'toast-msg' }, text);
+  $('toasts').append(t);
+  setTimeout(() => t.classList.add('out'), 2200);
+  setTimeout(() => t.remove(), 2600);
+}
 
 // --- Markdown (escape first, then a small safe subset) -------------------------------------
 
@@ -122,8 +143,7 @@ document.addEventListener('click', (e) => {
   const btn = e.target.closest('.copy-code');
   if (!btn) return;
   navigator.clipboard.writeText(btn.parentElement.querySelector('code').textContent);
-  btn.textContent = 'اتنسخ ✓';
-  setTimeout(() => (btn.textContent = 'نسخ'), 1500);
+  notify('اتنسخ الكود');
 });
 
 // --- Auth ----------------------------------------------------------------------------------
@@ -172,10 +192,10 @@ function closeSidebar() {
 function showView(name) {
   for (const v of Object.keys(views)) $(`view-${v}`).hidden = v !== name;
   for (const b of document.querySelectorAll('.nav button')) b.classList.toggle('active', b.dataset.view === name);
-  $('conversations').hidden = name !== 'chat';
-  $('history-label').hidden = name !== 'chat';
+  $('history').hidden = name !== 'chat';
   closeSidebar();
   if (TITLES[name]) $('title').textContent = TITLES[name];
+  $('delete-chat').hidden = name !== 'chat' || !state.conversationId;
   views[name]?.();
 }
 
@@ -188,27 +208,61 @@ $('scrim').addEventListener('click', closeSidebar);
 
 // --- Conversations -------------------------------------------------------------------------
 
-async function loadConversations() {
-  const list = await api('/api/conversations');
-  $('conversations').replaceChildren(
-    ...list.map((c) =>
+const convs = { list: [] };
+
+function groupOf(ms) {
+  const day = 86400_000;
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  if (ms >= start.getTime()) return 'النهارده';
+  if (ms >= start.getTime() - day) return 'امبارح';
+  if (ms >= start.getTime() - 7 * day) return 'آخر 7 أيام';
+  if (ms >= start.getTime() - 30 * day) return 'آخر 30 يوم';
+  return 'أقدم';
+}
+
+function renderConversations() {
+  const q = $('conv-search').value.trim().toLowerCase();
+  const items = convs.list.filter((c) => !q || c.title.toLowerCase().includes(q));
+  const out = [];
+  let group = null;
+  for (const c of items) {
+    const g = groupOf(c.updated_at);
+    if (g !== group) {
+      group = g;
+      out.push(el('li', { class: 'section-label' }, g));
+    }
+    out.push(
       el('li', { class: c.id === state.conversationId ? 'active' : '' },
         el('button', { class: 'conv', dir: 'auto', title: c.title, onclick: () => openConversation(c.id, c.title) }, c.title),
-        el('button', {
-          class: 'icon-btn del', 'aria-label': 'حذف', onclick: async () => {
-            if (!confirm('تحذف المحادثة دي؟')) return;
-            await api(`/api/conversations/${c.id}`, { method: 'DELETE' });
-            if (state.conversationId === c.id) newChat();
-            loadConversations();
-          },
-        }, icon('trash')),
+        el('button', { class: 'icon-btn del', 'aria-label': 'امسح', title: 'امسح', onclick: () => deleteConversation(c.id) }, icon('trash')),
       ),
-    ),
-  );
+    );
+  }
+  if (!out.length) out.push(el('li', { class: 'muted small empty-conv' }, q ? 'مفيش نتايج' : 'لسه مفيش محادثات'));
+  $('conversations').replaceChildren(...out);
 }
+
+async function loadConversations() {
+  convs.list = await api('/api/conversations');
+  renderConversations();
+}
+$('conv-search').addEventListener('input', renderConversations);
+
+async function deleteConversation(id) {
+  const title = convs.list.find((c) => c.id === id)?.title ?? '';
+  if (!(await confirmDialog('تمسح المحادثة دي؟', `«${title}» هتتمسح نهائي ومش هتعرف ترجّعها.`))) return;
+  await api(`/api/conversations/${id}`, { method: 'DELETE' });
+  notify('اتمسحت المحادثة');
+  if (state.conversationId === id) newChat();
+  else loadConversations();
+}
+
+$('delete-chat').addEventListener('click', () => state.conversationId && deleteConversation(state.conversationId));
 
 function newChat() {
   state.conversationId = null;
+  $('delete-chat').hidden = true;
   $('title').textContent = 'محادثة جديدة';
   $('messages').replaceChildren($('empty'));
   $('empty').hidden = false;
@@ -220,6 +274,7 @@ $('new-chat').addEventListener('click', newChat);
 
 async function openConversation(id, title) {
   state.conversationId = id;
+  $('delete-chat').hidden = false;
   $('title').textContent = title;
   showView('chat');
   const messages = await api(`/api/conversations/${id}`);
@@ -249,20 +304,20 @@ function messageActions(m) {
     class: 'icon-btn', title: 'نسخ', onclick: () => {
       navigator.clipboard.writeText(m.content);
       copyBtn.replaceChildren(icon('check'));
+      notify('اتنسخ الرد');
       setTimeout(() => copyBtn.replaceChildren(icon('copy')), 1500);
     },
   }, icon('copy'));
   return [
+    // CSS shows this only on the last answer.
+    el('button', { class: 'icon-btn regen', title: 'رد تاني', onclick: () => send('', { regenerate: true }) }, icon('redo')),
     copyBtn,
     el('button', { class: `icon-btn vote ${m.feedback === 1 ? 'on' : ''}`, title: 'رد حلو', onclick: (e) => vote(1, e.currentTarget) }, icon('up')),
     el('button', { class: `icon-btn vote ${m.feedback === -1 ? 'on' : ''}`, title: 'رد وحش', onclick: (e) => vote(-1, e.currentTarget) }, icon('down')),
   ];
 }
 
-function messageNode(m) {
-  if (m.role === 'user') {
-    return el('div', { class: 'msg user' }, el('div', { class: 'bubble', dir: 'auto' }, el('div', { class: 'body' }, m.content)));
-  }
+function answerParts(m) {
   const body = m.content
     ? el('div', { class: 'body', dir: 'auto', html: renderMarkdown(m.content) })
     : el('div', { class: 'typing' }, el('i'), el('i'), el('i'));
@@ -270,10 +325,27 @@ function messageNode(m) {
     m.model_name ? el('span', { class: `model-tag ${m.fallback ? 'fallback' : ''}`, title: m.fallback ? 'بديل بعد ما الأول وقع' : '' }, m.model_name) : null,
     ...messageActions(m),
   );
+  return [body, meta];
+}
+
+function messageNode(m) {
+  if (m.role === 'user') {
+    return el('div', { class: 'msg user' }, el('div', { class: 'bubble', dir: 'auto' }, el('div', { class: 'body' }, m.content)));
+  }
   return el('div', { class: 'msg assistant' },
     el('img', { src: '/icon.svg', alt: '', class: 'avatar' }),
-    el('div', { class: 'bubble' }, body, meta),
+    el('div', { class: 'bubble' }, ...answerParts(m)),
   );
+}
+
+/** Update a streaming answer in place: same node, so nothing re-animates or flickers. */
+function fillAnswer(node, m) {
+  const bubble = node.querySelector('.bubble');
+  const [body, meta] = answerParts(m);
+  const current = bubble.firstElementChild;
+  if (m.content && current.classList.contains('body')) current.innerHTML = body.innerHTML;
+  else current.replaceWith(body);
+  bubble.lastElementChild.replaceWith(meta);
 }
 
 function scrollDown(force = false) {
@@ -314,23 +386,31 @@ $('input').addEventListener('keydown', (e) => {
 
 $('stop').addEventListener('click', () => state.controller?.abort());
 
-$('composer').addEventListener('submit', async (e) => {
+$('composer').addEventListener('submit', (e) => {
   e.preventDefault();
   const text = $('input').value.trim();
   if (!text || state.controller) return;
   $('input').value = '';
   autosize();
+  send(text);
+});
+
+async function send(text, { regenerate = false } = {}) {
+  if (state.controller) return;
   $('empty').hidden = true;
-  $('messages').append(messageNode({ role: 'user', content: text }));
+  if (regenerate) {
+    const last = $('messages').lastElementChild;
+    if (last?.classList.contains('assistant')) last.remove();
+  } else {
+    $('messages').append(messageNode({ role: 'user', content: text }));
+  }
 
   const answer = { role: 'assistant', content: '', model_name: '' };
-  let node = messageNode(answer);
+  const node = messageNode(answer);
   $('messages').append(node);
   scrollDown(true);
   const render = () => {
-    const fresh = messageNode(answer);
-    node.replaceWith(fresh);
-    node = fresh;
+    fillAnswer(node, answer);
     scrollDown();
   };
 
@@ -341,7 +421,7 @@ $('composer').addEventListener('submit', async (e) => {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ conversationId: state.conversationId, message: text, model: $('model-pick').value }),
+      body: JSON.stringify({ conversationId: state.conversationId, message: text, model: $('model-pick').value, regenerate }),
       signal: state.controller.signal,
     });
     if (res.status === 401) return showLogin();
@@ -351,6 +431,7 @@ $('composer').addEventListener('submit', async (e) => {
       if (event === 'conversation') {
         const isNew = !state.conversationId;
         state.conversationId = data.id;
+        $('delete-chat').hidden = false;
         if (isNew) {
           $('title').textContent = text.slice(0, 60);
           loadConversations();
@@ -391,7 +472,7 @@ $('composer').addEventListener('submit', async (e) => {
     $('stop').hidden = true;
     loadModelPicker();
   }
-});
+}
 
 async function readEvents(stream, onEvent) {
   const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
@@ -503,7 +584,9 @@ async function loadModels() {
         ),
         el('div', { class: 'bar', title: `الجودة ${m.quality}` }, el('i', { style: false, 'data-q': m.quality })),
         el('div', { class: 'foot' },
-          el('span', {}, m.verified_at ? `اتأكد ${ago(m.verified_at)}` : 'لسه ما اتجرّبش'),
+          el('span', { title: m.last_error || '' }, m.verified_at
+            ? `اتأكد ${ago(m.verified_at)}`
+            : m.last_error ? 'هيتجرّب تاني خلال ساعة' : 'مستني دوره في التجربة'),
           el('button', {
             class: 'btn-ghost',
             onclick: async () => {

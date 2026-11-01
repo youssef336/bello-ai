@@ -7,6 +7,11 @@
   <meta name="theme-color" content="#0c0817">
   <title>Bello AI</title>
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icon-180.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Bello AI">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
@@ -55,8 +60,13 @@
         </button>
       </nav>
 
-      <div class="section-label" id="history-label">الأخيرة</div>
-      <ul id="conversations" class="conversations"></ul>
+      <div id="history" class="history">
+        <label class="conv-search">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="conv-search" type="search" dir="auto" placeholder="ابحث في المحادثات">
+        </label>
+        <ul id="conversations" class="conversations"></ul>
+      </div>
 
       <div class="sidebar-foot">
         <a href="/api/export" class="foot-link">
@@ -74,6 +84,9 @@
           <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
         </button>
         <span id="title" class="title">محادثة جديدة</span>
+        <button id="delete-chat" class="icon-btn danger-btn" aria-label="امسح المحادثة" title="امسح المحادثة" hidden>
+          <svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M5 7l1 13h12l1-13M9 7V4h6v3"/></svg>
+        </button>
         <span id="status-pill" class="pill"><i class="dot"></i><span id="status-text">…</span></span>
       </header>
 
@@ -188,5 +201,17 @@
       </section>
     </main>
   </div>
+
+  <dialog id="confirm-dialog" class="dialog glass">
+    <form method="dialog">
+      <h3 id="confirm-title"></h3>
+      <p id="confirm-text" class="muted"></p>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn-ghost">إلغاء</button>
+        <button value="ok" id="confirm-ok" class="btn-danger">امسح</button>
+      </div>
+    </form>
+  </dialog>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
 </body>
 </html>

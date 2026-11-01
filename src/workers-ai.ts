@@ -42,8 +42,8 @@ function errorResponse(e: unknown): Response {
       ? 402 // paid-plan-only model → marked paid, re-checked weekly
       : /not found|no such model|5007/i.test(message)
         ? 404
-        : /5006|required properties/i.test(message)
-          ? 400 // not a chat model (different input schema)
+        : /5006|required properties|5016|5018|4003|not allowed to access|does not have config|must submit the prompt/i.test(message)
+          ? 400 // permanent: not a chat model, licence to accept, or not available to this account
           : 500;
   const text = status === 429 ? `${message} (daily limit)` : message;
   return new Response(JSON.stringify({ error: { message: text } }), { status });

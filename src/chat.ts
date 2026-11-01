@@ -18,6 +18,8 @@ interface ChatInput {
   message: string;
   /** 'auto' or a model id from the registry. */
   model?: string;
+  /** Answer the last user message again: the previous answer is replaced. */
+  regenerate?: boolean;
 }
 
 interface Turn {
@@ -109,10 +111,11 @@ async function markFailure(env: Env, m: ModelRow, status: number, body: string, 
  * silent switch: a mid-answer failure is reported, never stitched from two models.
  */
 export async function chat(env: Env, ctx: ExecutionContext, input: ChatInput): Promise<Response> {
+  const at = now();
+  if (input.regenerate) return regenerate(env, ctx, input);
   const message = input.message.trim();
   if (!message) return new Response('empty message', { status: 400 });
 
-  const at = now();
   let conversationId = input.conversationId;
   if (conversationId) {
     const exists = await env.DB.prepare('SELECT 1 FROM conversations WHERE id = ?').bind(conversationId).first();
@@ -130,14 +133,44 @@ export async function chat(env: Env, ctx: ExecutionContext, input: ChatInput): P
   await env.DB.prepare(
     'INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
   ).bind(userMessageId, conversationId, 'user', message, at).run();
+  return answer(env, ctx, input, conversationId, userMessageId, message, past.results.reverse(), at);
+}
 
+/** Drop the answers after the last user message and answer it again. */
+async function regenerate(env: Env, ctx: ExecutionContext, input: ChatInput): Promise<Response> {
+  const conversationId = input.conversationId;
+  if (!conversationId) return new Response('conversation required', { status: 400 });
+  const last = await env.DB.prepare(
+    `SELECT id, content, created_at FROM messages WHERE conversation_id = ? AND role = 'user'
+      ORDER BY created_at DESC LIMIT 1`,
+  ).bind(conversationId).first<{ id: string; content: string; created_at: number }>();
+  if (!last) return new Response('nothing to regenerate', { status: 404 });
+  await env.DB.prepare('DELETE FROM messages WHERE conversation_id = ? AND created_at > ?')
+    .bind(conversationId, last.created_at).run();
+  const past = await env.DB.prepare(
+    `SELECT role, content FROM messages WHERE conversation_id = ? AND created_at < ?
+      ORDER BY created_at DESC LIMIT 60`,
+  ).bind(conversationId, last.created_at).all<Turn>();
+  return answer(env, ctx, input, conversationId, last.id, last.content, past.results.reverse(), now());
+}
+
+async function answer(
+  env: Env,
+  ctx: ExecutionContext,
+  input: ChatInput,
+  conversationId: string,
+  userMessageId: string,
+  message: string,
+  history: Turn[],
+  at: number,
+): Promise<Response> {
   const memories = await relevantMemories(env, message);
   const system = memories.length
     ? `${SYSTEM_PROMPT}\n\nWhat you know about the owner (use only when relevant):\n- ${memories.join('\n- ')}`
     : SYSTEM_PROMPT;
   const turns: Turn[] = [
     { role: 'system', content: system },
-    ...trimHistory([...past.results.reverse(), { role: 'user', content: message }], HISTORY_CHARS),
+    ...trimHistory([...history, { role: 'user', content: message }], HISTORY_CHARS),
   ];
   const promptChars = turns.reduce((n, t) => n + t.content.length, 0);
 

@@ -49,7 +49,10 @@ const routes: [string, RegExp, Handler][] = [
   }],
 
   ['POST', /^\/api\/chat$/, async (req, env, ctx) => {
-    const body = await req.json<{ conversationId?: string; message?: string; model?: string }>();
+    const body = await req.json<{ conversationId?: string; message?: string; model?: string; regenerate?: boolean }>();
+    if (body.regenerate) {
+      return chat(env, ctx, { conversationId: body.conversationId, message: '', model: body.model, regenerate: true });
+    }
     if (typeof body.message !== 'string' || body.message.length > 100_000) return error(400, 'bad message');
     return chat(env, ctx, { conversationId: body.conversationId, message: body.message, model: body.model });
   }],

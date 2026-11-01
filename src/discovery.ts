@@ -91,6 +91,57 @@ export interface ScanReport {
   error?: string;
 }
 
+/** Quick-test the models waiting on this provider: candidates first, then periodic re-checks. */
+async function testPending(env: Env, provider: Provider, key: string, report: ScanReport): Promise<void> {
+  const at = now();
+  // Candidates first, then failed models a day later, then paid ones a week later (free tiers change).
+  const toTest = await env.DB.prepare(
+    `SELECT * FROM models WHERE provider = ? AND paid = 0 AND (
+        status = 'candidate'
+        OR (status = 'failed' AND COALESCE(tested_at, 0) < ?)
+        OR (status = 'paid' AND COALESCE(tested_at, 0) < ?))
+     ORDER BY status = 'candidate' DESC, first_seen DESC LIMIT ?`,
+  )
+    .bind(provider.id, at - DAY, at - 7 * DAY, MAX_TESTS_PER_RUN)
+    .all<ModelRow>();
+
+  const tests = toTest.results;
+  for (let i = 0; i < tests.length && !report.error; i += TEST_CONCURRENCY) {
+    const group = tests.slice(i, i + TEST_CONCURRENCY);
+    const results = await Promise.all(group.map((m) => quickTest(provider, env, m.model)));
+    const stmts: D1PreparedStatement[] = [];
+    const t = now();
+    group.forEach((m, j) => {
+      const r = results[j]!;
+      const outcome = classifyFailure(r);
+      if (r.ok) {
+        stmts.push(env.DB.prepare(
+          `UPDATE models SET status = 'active', verified_at = ?, tested_at = ?, arabic_ok = ?,
+             latency_ms = ?, ok_count = ok_count + 1, last_error = NULL WHERE id = ?`,
+        ).bind(t, t, r.arabic ? 1 : 0, r.latencyMs, m.id));
+        if (m.status === 'candidate') {
+          report.added.push(m.id);
+          stmts.push(eventStmt(env, 'added', m.id, `${m.free_evidence ?? ''}${r.arabic ? '' : ' · weak Arabic'}`));
+        }
+      } else if (outcome === 'bad-key') {
+        // The key itself was rejected: no model is at fault, so nothing is marked.
+        report.error = `API key rejected (${r.error?.slice(0, 120)})`;
+      } else if (outcome === 'paid' || outcome === 'failed') {
+        (outcome === 'paid' ? report.paid : report.failed).push(m.id);
+        stmts.push(
+          env.DB.prepare(`UPDATE models SET status = ?, tested_at = ?, last_error = ? WHERE id = ?`)
+            .bind(outcome, t, r.error ?? null, m.id),
+          eventStmt(env, outcome, m.id, r.error ?? ''),
+        );
+      } else {
+        // Transient (rate limit, outage, timeout): status untouched, tried again next scan.
+        stmts.push(env.DB.prepare('UPDATE models SET last_error = ?, tested_at = ? WHERE id = ?').bind(r.error ?? null, t, m.id));
+      }
+    });
+    if (stmts.length) await env.DB.batch(stmts);
+  }
+}
+
 /**
  * Scan one provider: register new free models, test candidates, retire models the provider
  * dropped. New models that pass the quick test become active right away (auto-add).
@@ -155,52 +206,7 @@ export async function scanProvider(
   for (const id of report.removed) writes.push(eventStmt(env, 'removed', id, 'no longer in the provider catalog'));
   if (writes.length) await env.DB.batch(writes);
 
-  // Candidates first, then failed models a day later, then paid ones a week later (free tiers change).
-  const toTest = await env.DB.prepare(
-    `SELECT * FROM models WHERE provider = ? AND paid = 0 AND (
-        status = 'candidate'
-        OR (status = 'failed' AND COALESCE(tested_at, 0) < ?)
-        OR (status = 'paid' AND COALESCE(tested_at, 0) < ?))
-     ORDER BY status = 'candidate' DESC, first_seen DESC LIMIT ?`,
-  )
-    .bind(provider.id, at - DAY, at - 7 * DAY, MAX_TESTS_PER_RUN)
-    .all<ModelRow>();
-
-  const tests = toTest.results;
-  for (let i = 0; i < tests.length && !report.error; i += TEST_CONCURRENCY) {
-    const group = tests.slice(i, i + TEST_CONCURRENCY);
-    const results = await Promise.all(group.map((m) => quickTest(provider, env, m.model)));
-    const stmts: D1PreparedStatement[] = [];
-    const t = now();
-    group.forEach((m, j) => {
-      const r = results[j]!;
-      const outcome = classifyFailure(r);
-      if (r.ok) {
-        stmts.push(env.DB.prepare(
-          `UPDATE models SET status = 'active', verified_at = ?, tested_at = ?, arabic_ok = ?,
-             latency_ms = ?, ok_count = ok_count + 1, last_error = NULL WHERE id = ?`,
-        ).bind(t, t, r.arabic ? 1 : 0, r.latencyMs, m.id));
-        if (m.status === 'candidate') {
-          report.added.push(m.id);
-          stmts.push(eventStmt(env, 'added', m.id, `${m.free_evidence ?? ''}${r.arabic ? '' : ' · weak Arabic'}`));
-        }
-      } else if (outcome === 'bad-key') {
-        // The key itself was rejected: no model is at fault, so nothing is marked.
-        report.error = `API key rejected (${r.error?.slice(0, 120)})`;
-      } else if (outcome === 'paid' || outcome === 'failed') {
-        (outcome === 'paid' ? report.paid : report.failed).push(m.id);
-        stmts.push(
-          env.DB.prepare(`UPDATE models SET status = ?, tested_at = ?, last_error = ? WHERE id = ?`)
-            .bind(outcome, t, r.error ?? null, m.id),
-          eventStmt(env, outcome, m.id, r.error ?? ''),
-        );
-      } else {
-        // Transient (rate limit, outage, timeout): status untouched, tried again next scan.
-        stmts.push(env.DB.prepare('UPDATE models SET last_error = ? WHERE id = ?').bind(r.error ?? null, m.id));
-      }
-    });
-    if (stmts.length) await env.DB.batch(stmts);
-  }
+  await testPending(env, provider, key, report);
   await logEvent(env, 'scan', null,
     `${source === 'auto' ? '[auto] ' : ''}${provider.id}: ${report.found} free, +${report.added.length} added, -${report.removed.length} removed` +
       (report.error ? ` · ${report.error}` : ''));
@@ -240,13 +246,34 @@ export async function scheduledScan(env: Env): Promise<ScanReport | null> {
     round = { startedAt: at, done: [] };
   }
   const provider = pending(round)[0];
-  if (!provider) return null; // round finished, waiting for the next one
+  if (!provider) return retestWaiting(env, providers); // round finished: use the hour for waiting models
   round.done.push(provider.id);
   await env.DB.batch([
     setSettingStmt(env, 'scan_round', JSON.stringify(round)),
     setSettingStmt(env, 'last_cron', JSON.stringify({ at, provider: provider.id })),
   ]);
   return scanProvider(env, provider, 'auto');
+}
+
+/**
+ * Between rounds, each hourly wake-up tests models still waiting (new ones that hit a rate limit
+ * or did not fit in the last scan), one provider at a time, so none waits days for its test.
+ */
+async function retestWaiting(env: Env, providers: Provider[]): Promise<ScanReport | null> {
+  const ids = providers.map((p) => p.id);
+  const row = await env.DB.prepare(
+    `SELECT provider FROM models WHERE status = 'candidate' AND paid = 0
+       AND provider IN (${ids.map(() => '?').join(',')})
+     GROUP BY provider ORDER BY MIN(COALESCE(tested_at, 0)) LIMIT 1`,
+  ).bind(...ids).first<{ provider: string }>();
+  const provider = row && providerById(row.provider);
+  if (!provider) return null;
+  const report: ScanReport = { provider: provider.id, found: 0, added: [], removed: [], failed: [], paid: [] };
+  await testPending(env, provider, provider.keyOf(env)!, report);
+  if (report.added.length || report.failed.length || report.paid.length) {
+    await logEvent(env, 'scan', null, `[auto] ${provider.id}: tested waiting models, +${report.added.length} added`);
+  }
+  return report;
 }
 
 export async function scanById(env: Env, providerId: string): Promise<ScanReport | null> {

@@ -8,6 +8,11 @@ hits its limit, and **adds new free models by itself** as soon as a provider pub
 مساعد شخصي بالذكاء الاصطناعي على رابط عام، لصاحبه بس، ومن غير أي تكلفة. بيختار أحسن موديل مجاني
 لكل رسالة، ولو موديل خلص حده بيكمل على اللي بعده، وأي موديل مجاني جديد بينزل بيتجرّب ويتضاف لوحده.
 
+<p align="center">
+  <img src="docs/screenshots/chat.png" width="70%" alt="Chat">
+  <img src="docs/screenshots/mobile.png" width="24%" alt="Phone">
+</p>
+
 ## What it does
 
 - **Chat** with streaming, saved history, Markdown and code blocks, 👍/👎 that tunes the ranking.
@@ -25,6 +30,13 @@ hits its limit, and **adds new free models by itself** as soon as a provider pub
 - **Owner-only**: one password (PBKDF2, 100k rounds), HttpOnly SameSite=Strict session, 5 tries per
   IP per 15 min, same-origin check, strict CSP. Provider keys live only in Worker secrets.
 - **Export** everything as one JSON file.
+- **Phone first**: install it from the browser menu (Add to Home Screen) and it opens full screen
+  like an app. Conversations grouped by day with search, regenerate the last answer, delete with
+  a confirm.
+
+| Models (free) | Paid models | Phone menu |
+|---|---|---|
+| <img src="docs/screenshots/models.png" width="420"> | <img src="docs/screenshots/paid.png" width="420"> | <img src="docs/screenshots/mobile-menu.png" width="180"> |
 
 ## How "free" is decided
 
