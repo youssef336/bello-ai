@@ -15,6 +15,8 @@ export interface Env {
   OWNER_EMAIL?: string;
   /** base64 of 32 random bytes; encrypts the API keys people save. */
   KEYS_ENCRYPTION_KEY?: string;
+  /** Lets the weekly backup job read the database (see src/backup.ts). */
+  BACKUP_TOKEN?: string;
 }
 
 export const now = (): number => Date.now();

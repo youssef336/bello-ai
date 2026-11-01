@@ -39,6 +39,8 @@ export interface RouteRequest {
   /** Per-provider score adjustment (see Provider.bonus). */
   providerBonus: ReadonlyMap<string, number>;
   at: number;
+  /** The message carries a picture: only models that read images. */
+  vision?: boolean;
 }
 
 const CODE_NAME = /cod(e|er|ing)|devstral|qwen.*coder|deepseek/i;
@@ -48,6 +50,8 @@ const REASONING_NAME = /reason|think|r1\b|qwq|o\d|gpt-oss|kimi|deepseek/i;
 export function scoreModel(m: ModelRow, req: RouteRequest): number {
   if (m.status !== 'active' || m.cooldown_until > req.at) return -Infinity;
   if (m.context_length !== null && m.context_length < req.tokens + 1024) return -Infinity;
+  // Workers AI's adapter sends text only.
+  if (req.vision && (!m.supports_vision || m.provider === 'workers-ai')) return -Infinity;
 
   let score = m.quality;
 

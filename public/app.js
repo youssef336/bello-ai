@@ -1,6 +1,6 @@
 const $ = (id) => document.getElementById(id);
 
-const state = { conversationId: null, controller: null };
+const state = { conversationId: null, controller: null, web: false, compare: false, keepCompared: null };
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -100,8 +100,24 @@ function renderBlocks(text) {
     if (para.length) out.push(`<p>${para.join('<br>')}</p>`);
     para = [];
   };
-  for (const raw of escapeHtml(text).split('\n')) {
-    const line = raw.trimEnd();
+  const lines = escapeHtml(text).split('\n');
+  const isRow = (l) => /^\s*\|.*\|\s*$/.test(l ?? '');
+  const cells = (l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => inline(c.trim()));
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trimEnd();
+    // A Markdown table: header row, a |---| row, then body rows.
+    if (isRow(line) && /^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i + 1] ?? '') && lines[i + 1].includes('-')) {
+      flushPara();
+      flush();
+      const head = cells(line);
+      const body = [];
+      i += 2;
+      while (i < lines.length && isRow(lines[i])) body.push(cells(lines[i++]));
+      i--;
+      out.push(`<div class="table-wrap"><table><thead><tr>${head.map((c) => `<th>${c}</th>`).join('')}</tr></thead><tbody>${
+        body.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
+      continue;
+    }
     const ul = /^\s*[-*•] (.+)$/.exec(line);
     const ol = /^\s*\d+[.)] (.+)$/.exec(line);
     const h = /^#{1,6} (.+)$/.exec(line);
@@ -310,6 +326,7 @@ async function deleteConversation(id) {
 $('delete-chat').addEventListener('click', () => state.conversationId && deleteConversation(state.conversationId));
 
 function newChat() {
+  state.keepCompared?.();
   state.conversationId = null;
   $('delete-chat').hidden = true;
   $('title').textContent = 'محادثة جديدة';
@@ -322,6 +339,7 @@ function newChat() {
 $('new-chat').addEventListener('click', newChat);
 
 async function openConversation(id, title) {
+  await state.keepCompared?.();
   state.conversationId = id;
   $('delete-chat').hidden = false;
   $('title').textContent = title;
@@ -374,20 +392,59 @@ function messageActions(m) {
   ];
 }
 
+/** Stored as JSON text by the server, kept as arrays while streaming. */
+const list = (v) => {
+  if (Array.isArray(v)) return v;
+  try {
+    return v ? JSON.parse(v) : [];
+  } catch {
+    return [];
+  }
+};
+
+function viewImage(src) {
+  const d = el('dialog', { class: 'viewer', onclick: () => d.close() }, el('img', { src, alt: '' }));
+  d.addEventListener('close', () => d.remove());
+  document.body.append(d);
+  d.showModal();
+}
+
+function attachmentsNode(atts) {
+  if (!atts.length) return null;
+  return el('div', { class: 'msg-atts' }, ...atts.map((a) => (a.type === 'image'
+    ? el('img', { src: a.data, alt: a.name, title: a.name, onclick: () => viewImage(a.data) })
+    : el('span', { class: 'file-chip', title: a.name }, '📄', el('span', { dir: 'auto' }, a.name)))));
+}
+
+function sourcesNode(sources) {
+  const safe = list(sources).filter((s) => /^https?:\/\//.test(s.url));
+  if (!safe.length) return null;
+  return el('div', { class: 'sources' }, ...safe.map((s) =>
+    el('a', { href: s.url, target: '_blank', rel: 'noopener noreferrer', title: s.title }, '🔗', el('span', { dir: 'auto' }, s.title))));
+}
+
 function answerParts(m) {
+  const notice = m.notice ? el('div', { class: 'notice' }, m.notice.startsWith('بدوّر') ? `🌐 ${m.notice}` : `ℹ️ ${m.notice}`) : null;
   const body = m.content
     ? el('div', { class: 'body', dir: 'auto', html: renderMarkdown(m.content) })
     : el('div', { class: 'typing' }, el('i'), el('i'), el('i'));
+  const searched = m.web || list(m.sources).length > 0;
   const meta = el('div', { class: 'meta' },
-    m.model_name ? el('span', { class: `model-tag ${m.fallback ? 'fallback' : ''}`, title: m.fallback ? 'بديل بعد ما الأول وقع' : '' }, m.model_name) : null,
+    m.model_name
+      ? el('span', { class: `model-tag ${m.fallback ? 'fallback' : ''}`, title: searched ? 'رد من بحث على النت' : m.fallback ? 'بديل بعد ما الأول وقع' : '' },
+        searched ? el('span', { class: 'web-dot' }, '🌐') : null, m.model_name)
+      : null,
     ...messageActions(m),
   );
-  return [body, meta];
+  return [notice, body, sourcesNode(m.sources), meta];
 }
 
 function messageNode(m) {
   if (m.role === 'user') {
-    return el('div', { class: 'msg user' }, el('div', { class: 'bubble', dir: 'auto' }, el('div', { class: 'body' }, m.content)));
+    return el('div', { class: 'msg user' }, el('div', { class: 'bubble', dir: 'auto' },
+      attachmentsNode(list(m.attachments)),
+      m.content ? el('div', { class: 'body' }, m.content) : null,
+    ));
   }
   return el('div', { class: 'msg assistant' },
     el('img', { src: '/icon.svg', alt: '', class: 'avatar' }),
@@ -398,11 +455,15 @@ function messageNode(m) {
 /** Update a streaming answer in place: same node, so nothing re-animates or flickers. */
 function fillAnswer(node, m) {
   const bubble = node.querySelector('.bubble');
-  const [body, meta] = answerParts(m);
-  const current = bubble.firstElementChild;
+  const [notice, body, sources, meta] = answerParts(m);
+  const current = bubble.querySelector(':scope > .body, :scope > .typing');
   if (m.content && current.classList.contains('body')) current.innerHTML = body.innerHTML;
   else current.replaceWith(body);
-  bubble.lastElementChild.replaceWith(meta);
+  bubble.querySelector(':scope > .notice')?.remove();
+  if (notice) bubble.prepend(notice);
+  bubble.querySelector(':scope > .sources')?.remove();
+  bubble.querySelector(':scope > .meta').replaceWith(meta);
+  if (sources) meta.before(sources);
 }
 
 function scrollDown(force = false) {
@@ -411,16 +472,179 @@ function scrollDown(force = false) {
   if (force || nearBottom) box.scrollTop = box.scrollHeight;
 }
 
+// --- Attachments ---------------------------------------------------------------------------
+
+const MAX_IMAGES = 4;
+const MAX_FILES = 3;
+const MAX_FILE_CHARS = 120_000;
+const pending = [];
+
+function renderTray() {
+  $('tray').hidden = pending.length === 0;
+  $('tray').replaceChildren(...pending.map((a) => {
+    const remove = el('button', {
+      type: 'button', class: 'x', 'aria-label': 'شيل', onclick: () => {
+        pending.splice(pending.indexOf(a), 1);
+        renderTray();
+      },
+    }, icon('x'));
+    if (a.type === 'image') {
+      return el('div', { class: `att image ${a.busy ? 'busy' : ''}`, title: a.name },
+        a.data ? el('img', { src: a.data, alt: a.name }) : el('div', { class: 'typing' }, el('i'), el('i'), el('i')), remove);
+    }
+    return el('div', { class: `att ${a.busy ? 'busy' : ''}`, title: a.name },
+      a.busy ? '⏳' : '📄', el('span', { class: 'name', dir: 'auto' }, a.name), remove);
+  }));
+}
+
+/** Pictures go up as JPEG, at most 1280 px on the long side: small enough for every provider. */
+async function shrinkImage(source) {
+  const bmp = await createImageBitmap(source);
+  const scale = Math.min(1, 1280 / Math.max(bmp.width, bmp.height));
+  const canvas = el('canvas', { width: Math.round(bmp.width * scale), height: Math.round(bmp.height * scale) });
+  const g = canvas.getContext('2d');
+  g.fillStyle = '#fff';
+  g.fillRect(0, 0, canvas.width, canvas.height);
+  g.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  let quality = 0.82;
+  let url = canvas.toDataURL('image/jpeg', quality);
+  while (url.length > 1_300_000 && quality > 0.4) {
+    quality -= 0.15;
+    url = canvas.toDataURL('image/jpeg', quality);
+  }
+  return url;
+}
+
+let pdfjs = null;
+/** Text of a PDF. A scanned PDF has none: its first pages come back as pictures instead. */
+async function readPdf(file) {
+  if (!pdfjs) {
+    pdfjs = await import('/vendor/pdfjs/pdf.min.mjs');
+    pdfjs.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.min.mjs';
+  }
+  const doc = await pdfjs.getDocument({ data: await file.arrayBuffer(), isEvalSupported: false, disableFontFace: true }).promise;
+  const pages = [];
+  let total = 0;
+  for (let i = 1; i <= doc.numPages && total < MAX_FILE_CHARS; i++) {
+    const content = await (await doc.getPage(i)).getTextContent();
+    const text = content.items.map((it) => it.str + (it.hasEOL ? '\n' : ' ')).join('').trim();
+    if (text) pages.push(`[صفحة ${i}]\n${text}`);
+    total += text.length;
+  }
+  if (total > 40) return { text: pages.join('\n\n') };
+  const images = [];
+  for (let i = 1; i <= Math.min(doc.numPages, MAX_IMAGES); i++) {
+    const page = await doc.getPage(i);
+    const base = page.getViewport({ scale: 1 });
+    const viewport = page.getViewport({ scale: Math.min(2, 1280 / Math.max(base.width, base.height)) });
+    const canvas = el('canvas', { width: Math.floor(viewport.width), height: Math.floor(viewport.height) });
+    await page.render({ canvas, canvasContext: canvas.getContext('2d'), viewport }).promise;
+    images.push(await shrinkImage(canvas));
+  }
+  return { images };
+}
+
+const count = (type) => pending.filter((a) => a.type === type).length;
+
+async function addFiles(files) {
+  for (const file of files) {
+    const isImage = file.type.startsWith('image/');
+    if (isImage ? count('image') >= MAX_IMAGES : count('file') >= MAX_FILES) {
+      notify(isImage ? `أقصى حاجة ${MAX_IMAGES} صور في الرسالة` : `أقصى حاجة ${MAX_FILES} ملفات في الرسالة`);
+      continue;
+    }
+    const item = { type: isImage ? 'image' : 'file', name: file.name || 'صورة', busy: true };
+    pending.push(item);
+    renderTray();
+    try {
+      if (isImage) {
+        item.data = await shrinkImage(file);
+      } else if (/\.pdf$/i.test(file.name) || file.type === 'application/pdf') {
+        const pdf = await readPdf(file);
+        if (pdf.text) {
+          item.text = pdf.text.slice(0, MAX_FILE_CHARS);
+        } else {
+          // A scan: send its pages as pictures so a model that reads images can still read it.
+          pending.splice(pending.indexOf(item), 1);
+          for (const [i, data] of pdf.images.slice(0, MAX_IMAGES - count('image')).entries()) {
+            pending.push({ type: 'image', name: `${file.name} · ${i + 1}`, data });
+          }
+          notify('الـ PDF ده صور من غير نص، هبعته كصور');
+        }
+      } else {
+        if (file.size > 2_000_000) throw new Error('big');
+        item.text = (await file.text()).slice(0, MAX_FILE_CHARS);
+      }
+      item.busy = false;
+    } catch {
+      const at = pending.indexOf(item);
+      if (at >= 0) pending.splice(at, 1);
+      notify(`ماقدرتش أقرا ${file.name}`);
+    }
+    renderTray();
+  }
+}
+
+$('attach').addEventListener('click', () => $('file-pick').click());
+$('file-pick').addEventListener('change', (e) => {
+  addFiles([...e.target.files]);
+  e.target.value = '';
+});
+$('input').addEventListener('paste', (e) => {
+  const files = [...(e.clipboardData?.files ?? [])];
+  if (!files.length) return;
+  e.preventDefault();
+  addFiles(files);
+});
+let dropHint = null;
+$('view-chat').addEventListener('dragover', (e) => {
+  if (![...e.dataTransfer.types].includes('Files')) return;
+  e.preventDefault();
+  dropHint ??= document.body.appendChild(el('div', { class: 'drop-hint' }, 'سيب الملف هنا 📎'));
+});
+const hideDrop = () => {
+  dropHint?.remove();
+  dropHint = null;
+};
+$('view-chat').addEventListener('dragleave', (e) => { if (!e.relatedTarget || !$('view-chat').contains(e.relatedTarget)) hideDrop(); });
+$('view-chat').addEventListener('drop', (e) => {
+  hideDrop();
+  if (!e.dataTransfer.files.length) return;
+  e.preventDefault();
+  addFiles([...e.dataTransfer.files]);
+});
+
+// --- Web search and compare toggles --------------------------------------------------------
+
+function toggle(id, on) {
+  $(id).setAttribute('aria-pressed', String(on));
+  state[id] = on;
+}
+$('web').addEventListener('click', () => {
+  const on = !state.web;
+  toggle('web', on);
+  if (on) toggle('compare', false);
+  notify(on ? '🌐 هيدوّر على النت قبل ما يرد' : 'البحث على النت اتقفل');
+});
+$('compare').addEventListener('click', () => {
+  const on = !state.compare;
+  toggle('compare', on);
+  if (on) toggle('web', false);
+  notify(on ? '⚖️ 3 موديلات هيردّوا وانت تختار' : 'المقارنة اتقفلت');
+});
+
 // --- Sending -------------------------------------------------------------------------------
 
 async function loadModelPicker() {
   const models = await api('/api/models');
   const active = models.filter((m) => m.status === 'active');
   const resting = active.filter((m) => m.cooldown_until > Date.now()).length;
+  const current = $('model-pick').value;
   $('model-pick').replaceChildren(
     el('option', { value: 'auto' }, 'تلقائي'),
     ...active.map((m) => el('option', { value: m.id }, m.paid ? `💎 ${m.name}` : m.name)),
   );
+  if (active.some((m) => m.id === current)) $('model-pick').value = current;
   const pill = $('status-pill');
   pill.className = `pill ${active.length - resting > 0 ? 'ok' : 'warn'}`;
   $('status-text').textContent = active.length
@@ -446,20 +670,83 @@ $('stop').addEventListener('click', () => state.controller?.abort());
 $('composer').addEventListener('submit', (e) => {
   e.preventDefault();
   const text = $('input').value.trim();
-  if (!text || state.controller) return;
+  if ((!text && !pending.length) || state.controller) return;
+  if (pending.some((a) => a.busy)) return notify('استنى الملفات تخلص قراية');
+  const attachments = pending.splice(0).map(({ type, name, data, text: t }) => (type === 'image' ? { type, name, data } : { type, name, text: t }));
+  renderTray();
   $('input').value = '';
   autosize();
-  send(text);
+  send(text, { attachments });
 });
 
-async function send(text, { regenerate = false } = {}) {
+/** POST to /api/chat and hand every SSE event to onEvent; owns the send/stop buttons. */
+async function stream(body, onEvent) {
+  state.controller = new AbortController();
+  $('send').hidden = true;
+  $('stop').hidden = false;
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: state.controller.signal,
+    });
+    if (res.status === 401) {
+      showLogin();
+      return;
+    }
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      throw new Error(data?.error || `HTTP ${res.status}`);
+    }
+    await readEvents(res.body, onEvent);
+  } finally {
+    state.controller = null;
+    $('send').hidden = false;
+    $('stop').hidden = true;
+    loadModelPicker();
+  }
+}
+
+/** Shared by both modes: a new conversation's id and, later, its generated title. */
+function conversationEvent(event, data, firstText) {
+  if (event === 'conversation') {
+    const isNew = !state.conversationId;
+    state.conversationId = data.id;
+    $('delete-chat').hidden = false;
+    if (isNew) {
+      $('title').textContent = firstText.slice(0, 60);
+      loadConversations();
+    }
+  } else if (event === 'title') {
+    $('title').textContent = data.title;
+    loadConversations();
+  }
+}
+
+/** Calls fn at most once per animation frame. */
+function perFrame(fn) {
+  let queued = false;
+  return () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      fn();
+    });
+  };
+}
+
+async function send(text, { regenerate = false, attachments = [] } = {}) {
   if (state.controller) return;
+  await state.keepCompared?.();
+  if (state.compare && !regenerate) return sendCompare(text, attachments);
   $('empty').hidden = true;
   if (regenerate) {
     const last = $('messages').lastElementChild;
     if (last?.classList.contains('assistant')) last.remove();
   } else {
-    $('messages').append(messageNode({ role: 'user', content: text }));
+    $('messages').append(messageNode({ role: 'user', content: text, attachments }));
   }
 
   const answer = { role: 'assistant', content: '', model_name: '' };
@@ -470,66 +757,131 @@ async function send(text, { regenerate = false } = {}) {
     fillAnswer(node, answer);
     scrollDown();
   };
+  const renderSoon = perFrame(render);
 
-  state.controller = new AbortController();
-  $('send').hidden = true;
-  $('stop').hidden = false;
   try {
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ conversationId: state.conversationId, message: text, model: $('model-pick').value, regenerate }),
-      signal: state.controller.signal,
-    });
-    if (res.status === 401) return showLogin();
-    if (!res.ok) throw new Error(await res.text());
-    let pending = false;
-    await readEvents(res.body, (event, data) => {
-      if (event === 'conversation') {
-        const isNew = !state.conversationId;
-        state.conversationId = data.id;
-        $('delete-chat').hidden = false;
-        if (isNew) {
-          $('title').textContent = text.slice(0, 60);
-          loadConversations();
+    await stream(
+      { conversationId: state.conversationId, message: text, model: $('model-pick').value, regenerate, attachments, web: state.web },
+      (event, data) => {
+        conversationEvent(event, data, text || attachments[0]?.name || '');
+        if (event === 'model') {
+          if (data.web) answer.notice = null;
+          answer.model_name = data.name;
+          answer.fallback = data.fallback;
+          answer.web = data.web;
+          answer.content = '';
+        } else if (event === 'token') {
+          answer.content += data.t;
+          return renderSoon();
+        } else if (event === 'searching') {
+          answer.notice = 'بدوّر على النت وبقرا الصفحات…';
+        } else if (event === 'notice') {
+          answer.notice = data.message;
+        } else if (event === 'sources') {
+          answer.sources = data.sources;
+        } else if (event === 'done') {
+          answer.id = data.messageId;
+          navigator.vibrate?.(12);
+        } else if (event === 'error') {
+          answer.content += `${answer.content ? '\n\n' : ''}⚠️ ${data.message}`;
         }
-      } else if (event === 'model') {
-        answer.model_name = data.name;
-        answer.fallback = data.fallback;
-        answer.content = '';
-      } else if (event === 'token') {
-        answer.content += data.t;
-      } else if (event === 'done') {
-        answer.id = data.messageId;
-        navigator.vibrate?.(12);
-      } else if (event === 'error') {
-        answer.content += `${answer.content ? '\n\n' : ''}⚠️ ${data.message}`;
-      }
-      // Batch token renders to one per frame.
-      if (event === 'token') {
-        if (!pending) {
-          pending = true;
-          requestAnimationFrame(() => {
-            pending = false;
-            render();
-          });
-        }
-      } else {
         render();
-      }
-    });
+      },
+    );
     render();
   } catch (err) {
     if (err.name !== 'AbortError') {
       answer.content += `\n\n⚠️ ${err.message}`;
       render();
     }
-  } finally {
-    state.controller = null;
-    $('send').hidden = false;
-    $('stop').hidden = true;
-    loadModelPicker();
   }
+}
+
+/** Three answers side by side; the one kept becomes the conversation's answer. */
+async function sendCompare(text, attachments) {
+  $('empty').hidden = true;
+  $('messages').append(messageNode({ role: 'user', content: text, attachments }));
+  const slots = [];
+  const grid = el('div', { class: 'compare' });
+  const title = el('div', { class: 'compare-title' }, '⚖️ بيردّوا مع بعض… اختار أحسن رد وهو اللي يتحفظ');
+  const block = el('div', { class: 'compare-block' }, title, grid);
+  $('messages').append(block);
+  scrollDown(true);
+
+  const keep = async (s) => {
+    if (block.dataset.kept) return;
+    block.dataset.kept = '1';
+    state.keepCompared = null;
+    for (const b of grid.querySelectorAll('.pick')) b.disabled = true;
+    try {
+      const { messageId } = await api('/api/compare/pick', {
+        method: 'POST',
+        body: JSON.stringify({ conversationId: block.dataset.conversation, modelId: s.id, text: s.content }),
+      });
+      block.replaceWith(messageNode({ role: 'assistant', id: messageId, content: s.content, model_name: s.model_name, feedback: 1 }));
+      notify('اتحفظ الرد ده 👍 والموديل خد نقطة');
+    } catch (err) {
+      delete block.dataset.kept;
+      for (const b of grid.querySelectorAll('.pick')) b.disabled = false;
+      notify(err.message);
+    }
+  };
+
+  const renderSlots = () => {
+    grid.style.setProperty('--slots', String(Math.max(slots.length, 1)));
+    grid.replaceChildren(...slots.map((s) => {
+      const card = s.node ?? (s.node = el('div', { class: 'compare-card' },
+        el('div', { class: 'head' }, el('span', {}, `${slots.indexOf(s) + 1}.`), el('b', { dir: 'auto' }, ''), el('span', { class: 'prov' }, '')),
+        el('div', { class: 'body', dir: 'auto' }),
+        el('button', { type: 'button', class: 'pick', disabled: true, onclick: () => keep(s) }, 'اختار ده'),
+      ));
+      card.classList.toggle('failed', Boolean(s.failed));
+      card.querySelector('.head b').textContent = s.model_name || '…';
+      card.querySelector('.head .prov').textContent = s.provider ? `· ${s.provider}` : '';
+      const body = card.querySelector('.body');
+      if (s.content) body.innerHTML = renderMarkdown(s.content);
+      else body.replaceChildren(s.failed ? `⚠️ ${s.failed}` : el('div', { class: 'typing' }, el('i'), el('i'), el('i')));
+      card.querySelector('.pick').disabled = !s.done || Boolean(block.dataset.kept);
+      return card;
+    }));
+    scrollDown();
+  };
+  const renderSoon = perFrame(renderSlots);
+
+  // Sending again without choosing keeps the first finished answer, so the history stays whole.
+  state.keepCompared = async () => {
+    const first = slots.find((s) => s.done);
+    if (first) await keep(first);
+    state.keepCompared = null;
+  };
+
+  try {
+    await stream({ conversationId: state.conversationId, message: text, attachments, compare: true }, (event, data) => {
+      conversationEvent(event, data, text || attachments[0]?.name || '');
+      if (event === 'conversation') {
+        block.dataset.conversation = data.id;
+        for (let i = 0; i < (data.slots ?? 0); i++) slots.push({ content: '' });
+      } else if (event === 'model') {
+        Object.assign(slots[data.slot], { id: data.id, model_name: data.name, provider: data.provider, content: '', failed: null });
+      } else if (event === 'token') {
+        slots[data.slot].content += data.t;
+        return renderSoon();
+      } else if (event === 'slot-done') {
+        slots[data.slot].done = true;
+        navigator.vibrate?.(8);
+      } else if (event === 'slot-error') {
+        slots[data.slot].failed = data.message;
+      } else if (event === 'error') {
+        title.textContent = `⚠️ ${data.message}`;
+      } else if (event === 'done') {
+        title.textContent = slots.some((s) => s.done) ? '⚖️ خلصوا — اختار أحسن رد وهو اللي يتحفظ' : '⚠️ ولا موديل عرف يرد';
+      }
+      renderSlots();
+    });
+  } catch (err) {
+    if (err.name !== 'AbortError') title.textContent = `⚠️ ${err.message}`;
+  }
+  renderSlots();
 }
 
 async function readEvents(stream, onEvent) {

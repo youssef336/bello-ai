@@ -72,7 +72,7 @@ interface OpenAiList {
 }
 
 /** For providers whose catalog is OpenAI-shaped and carries no price. */
-function openAiCatalog(baseUrl: string, evidence: string, stripPrefix = '') {
+function openAiCatalog(baseUrl: string, evidence: string, stripPrefix = '', vision?: RegExp) {
   return async (key: string): Promise<DiscoveredModel[]> => {
     const list = await getJson<OpenAiList>(`${baseUrl}/models`, key);
     return list.data
@@ -84,7 +84,8 @@ function openAiCatalog(baseUrl: string, evidence: string, stripPrefix = '') {
           name: model,
           contextLength: m.context_window ?? null,
           tools: false,
-          vision: false,
+          // These catalogs list no input types, so the family name has to say it reads images.
+          vision: vision?.test(model) ?? false,
           evidence,
         };
       });
@@ -120,6 +121,8 @@ export const PROVIDERS: Provider[] = [
     discover: openAiCatalog(
       'https://api.groq.com/openai/v1',
       'Groq free plan key (console.groq.com/settings/limits); answered the quick test',
+      '',
+      /llama-4|vision/i,
     ),
   },
   {
@@ -145,6 +148,7 @@ export const PROVIDERS: Provider[] = [
       'https://generativelanguage.googleapis.com/v1beta/openai',
       'Gemini API key without billing (ai.google.dev/gemini-api/docs/rate-limits); answered the quick test',
       'models/',
+      /^gemini-|^gemma-[34]/i,
     ),
   },
   {

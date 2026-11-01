@@ -9,8 +9,10 @@ import {
   logout,
   type User,
 } from './auth';
+import { parseAttachments } from './attachments';
+import { backupPage } from './backup';
 import { benchSome } from './bench';
-import { chat } from './chat';
+import { chat, pickAnswer } from './chat';
 import { loadRound, nextScanAt, scanById, scheduledScan } from './discovery';
 import { type Env, error, json, newId, now } from './env';
 import { checkKey, KEYED_PROVIDERS, keysFor, saveKey } from './keys';
@@ -60,7 +62,8 @@ const routes: [string, RegExp, boolean, Handler][] = [
 
   ['GET', /^\/api\/conversations\/([\w-]+)$/, ANYONE, async (_r, env, _c, user, [id]) => {
     const rows = await env.DB.prepare(
-      `SELECT m.id, m.role, m.content, m.model_id, m.feedback, m.created_at, md.name AS model_name
+      `SELECT m.id, m.role, m.content, m.attachments, m.sources, m.model_id, m.feedback, m.created_at,
+              md.name AS model_name
          FROM messages m JOIN conversations c ON c.id = m.conversation_id
          LEFT JOIN models md ON md.id = m.model_id
         WHERE m.conversation_id = ? AND c.user_id = ? ORDER BY m.created_at`,
@@ -79,12 +82,36 @@ const routes: [string, RegExp, boolean, Handler][] = [
   }],
 
   ['POST', /^\/api\/chat$/, ANYONE, async (req, env, ctx, user) => {
-    const body = await req.json<{ conversationId?: string; message?: string; model?: string; regenerate?: boolean }>();
+    const body = await req.json<{
+      conversationId?: string;
+      message?: string;
+      model?: string;
+      regenerate?: boolean;
+      attachments?: unknown;
+      web?: boolean;
+      compare?: boolean;
+    }>();
     if (body.regenerate) {
-      return chat(env, ctx, user, { conversationId: body.conversationId, message: '', model: body.model, regenerate: true });
+      return chat(env, ctx, user, {
+        conversationId: body.conversationId, message: '', model: body.model, regenerate: true, web: body.web === true,
+      });
     }
     if (typeof body.message !== 'string' || body.message.length > 100_000) return error(400, 'bad message');
-    return chat(env, ctx, user, { conversationId: body.conversationId, message: body.message, model: body.model });
+    const attachments = parseAttachments(body.attachments);
+    if (typeof attachments === 'string') return error(400, attachments);
+    return chat(env, ctx, user, {
+      conversationId: body.conversationId,
+      message: body.message,
+      model: body.model,
+      attachments,
+      web: body.web === true,
+      compare: body.compare === true,
+    });
+  }],
+
+  ['POST', /^\/api\/compare\/pick$/, ANYONE, async (req, env, _c, user) => {
+    const id = await pickAnswer(env, user, await req.json());
+    return id ? json({ messageId: id }) : error(400, 'cannot keep this answer');
   }],
 
   ['POST', /^\/api\/messages\/([\w-]+)\/feedback$/, ANYONE, async (req, env, _c, user, [id]) => {
@@ -335,6 +362,9 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext): Promise
     const origin = req.headers.get('origin');
     if (origin && origin !== url.origin) return error(403, 'cross-origin request');
   }
+
+  // Weekly backup from the private backups repo's GitHub Action; its own token, no session.
+  if (url.pathname === '/api/backup' && req.method === 'GET') return backupPage(req, env);
 
   if (url.pathname === '/api/auth/config' && req.method === 'GET') {
     return json({ google: googleEnabled(env) });

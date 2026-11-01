@@ -26,6 +26,15 @@ hits its limit, and **adds new free models by itself** as soon as a provider pub
 - **Paid models, off by default**: the models page lists every paid model with its price per 1M
   tokens. Top up OpenRouter credits, switch paid mode on, allow the models you want, set a monthly
   cap. Empty credits or a reached cap → back to free models; it never spends without credits.
+- **Pictures and files**: attach up to 4 pictures and 3 files (PDF, text, code) — or paste / drop
+  them. Pictures are shrunk to JPEG in the browser and go to a model that reads images; PDF text is
+  read in the browser with pdf.js, and a scanned PDF goes as page pictures.
+- **Web search** (🌐): Groq's gpt-oss models search and open pages themselves (free on Groq's
+  plan); the answer shows the pages it read. Switches itself on for news, prices and weather.
+  (Gemini's Google Search grounding is no longer free on current models.)
+- **Compare** (⚖️): three different models answer side by side; the one you keep is saved and earns
+  the model a point.
+- **Auto titles**: a fast model names each new conversation while the answer streams.
 - **Memory**: notes about you; pinned ones always go in, the rest only when they match the message.
 - **Friends, without sharing your limits**: invite emails; they sign in with Google and add their
   own free keys (a guided page, ~2 minutes). Keys are AES-256-GCM encrypted, bound to the user and
@@ -39,7 +48,8 @@ hits its limit, and **adds new free models by itself** as soon as a provider pub
 - **Nice to use**: 8 themes (purple, ocean, emerald, sunset, rose, gold, AMOLED, light), text size,
   voice input in Egyptian Arabic, read-aloud, share, quick actions (summarise, translate, fix,
   simplify, continue), haptics on Android.
-- **Export** everything as one JSON file.
+- **Export** everything as one JSON file, and an **encrypted weekly backup** to a private GitHub
+  repo (see *Backups*).
 - **Phone first**: install it from the browser menu (Add to Home Screen) and it opens full screen
   like an app. Conversations grouped by day with search, regenerate the last answer, delete with
   a confirm.
@@ -131,6 +141,20 @@ Then **الأعضاء → ادعي** an email; that person opens the site and si
 
 Checked against developers.cloudflare.com on 2026-11-01. Free plans change; re-check now and then.
 
+## Backups
+
+`GET /api/backup` pages through the database for a GitHub Action in a **private** repo
+(`bello-ai-backups`), which encrypts the dump (AES-256, `openssl -pbkdf2`) and commits it every
+Friday, keeping the newest 12. Setup: a random `BACKUP_TOKEN` as a Worker secret and as a secret of
+that repo, plus `BACKUP_PASSPHRASE` in that repo (keep a copy in your password manager). Sessions
+and login attempts are not backed up. Restore:
+
+```bash
+openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in bello-ai-DATE.json.gz.enc | gunzip > backup.json
+node scripts/restore-backup.mjs backup.json > restore.sql
+npx wrangler d1 execute bello-ai --remote --file restore.sql
+```
+
 ## Privacy
 
 Free tiers may use your prompts to improve their models (Gemini's free tier says so; check each
@@ -139,8 +163,10 @@ Your data (history, memory) stays in **your** D1 database; back it up with **ت�
 
 ## Roadmap
 
-- [ ] File upload (PDF / images for vision models)
+- [x] File upload (PDF / images for vision models)
+- [x] Web search with sources
+- [x] Encrypted weekly backups
 - [ ] Semantic memory (Workers AI embeddings + Vectorize, both have free tiers)
 - [ ] Weekly benchmark on your own prompts to replace the name-based quality guess
 - [ ] Optional local models (Ollama) through Cloudflare Tunnel
-- [ ] Parallel "ask 3 models and compare" mode
+- [x] Parallel "ask 3 models and compare" mode

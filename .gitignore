@@ -4,3 +4,4 @@ node_modules/
 .env*
 !.dev.vars.example
 dist/
+.backup-passphrase
