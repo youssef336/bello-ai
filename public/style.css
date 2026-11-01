@@ -23,7 +23,7 @@
   --accent-soft: rgba(167, 139, 250, .12);
   --radius: 18px;
   --font: 'IBM Plex Sans Arabic', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, 'IBM Plex Sans Arabic', monospace;
   color-scheme: dark;
 }
 
@@ -471,3 +471,58 @@ tr + tr td { border-top: 1px solid var(--line); }
 .doc hr { border: 0; border-top: 1px solid var(--line); margin: 40px 0; }
 .doc-en { text-align: left; }
 .privacy-link { text-decoration: none; }
+
+/* ---------- Characterful themes ---------- */
+[data-theme="ramadan"] { --bg: #070b1a; --bg-2: #0d1430; --glass: rgba(16, 24, 56, .74); --glass-line: rgba(245, 196, 81, .14); --line: rgba(245, 196, 81, .14); --soft: rgba(245, 196, 81, .06); --muted: #a3a8c4; --accent: #f5c451; --grad: linear-gradient(135deg, #f5c451, #b7791f); --user-bg: linear-gradient(135deg, #1e3a8a, #0f1d4a); --glow: rgba(245, 196, 81, .35); --aura-1: rgba(245, 196, 81, .12); --aura-2: rgba(59, 130, 246, .14); --accent-soft: rgba(245, 196, 81, .12); }
+[data-theme="ramadan"] .msg.user .bubble { border: 1px solid rgba(245, 196, 81, .35); }
+/* Stars: a few tiny dots scattered over the sky. */
+[data-theme="ramadan"] body {
+  background-image:
+    radial-gradient(1.5px 1.5px at 12% 18%, rgba(255, 236, 179, .8), transparent),
+    radial-gradient(1px 1px at 32% 8%, rgba(255, 255, 255, .7), transparent),
+    radial-gradient(1.5px 1.5px at 58% 22%, rgba(255, 236, 179, .7), transparent),
+    radial-gradient(1px 1px at 78% 12%, rgba(255, 255, 255, .6), transparent),
+    radial-gradient(1px 1px at 88% 34%, rgba(255, 236, 179, .6), transparent),
+    radial-gradient(1px 1px at 22% 42%, rgba(255, 255, 255, .5), transparent),
+    radial-gradient(1.5px 1.5px at 66% 48%, rgba(255, 236, 179, .5), transparent);
+  background-attachment: fixed;
+}
+[data-theme="ramadan"] .brand::after { content: '🌙'; font-size: 16px; }
+
+[data-theme="cairo"] { --bg: #0b0908; --bg-2: #161210; --glass: rgba(30, 24, 20, .74); --glass-line: rgba(255, 138, 61, .12); --line: rgba(255, 138, 61, .13); --soft: rgba(255, 138, 61, .06); --muted: #b3a294; --accent: #ff8a3d; --grad: linear-gradient(135deg, #ff8a3d, #c2410c); --user-bg: linear-gradient(135deg, #ea580c, #9a3412); --glow: rgba(234, 88, 12, .5); --aura-1: rgba(255, 138, 61, .16); --aura-2: rgba(250, 204, 21, .08); --accent-soft: rgba(255, 138, 61, .12); }
+/* Street-light glow from the bottom of the screen. */
+[data-theme="cairo"] .aurora { inset: auto -10% -30%; height: 60vh; }
+
+[data-theme="terminal"] { --bg: #000; --bg-2: #050805; --glass: rgba(6, 14, 6, .85); --glass-line: rgba(34, 197, 94, .2); --line: rgba(34, 197, 94, .2); --soft: rgba(34, 197, 94, .06); --text: #b6f7c6; --muted: #4f8a5f; --accent: #22c55e; --grad: linear-gradient(135deg, #16a34a, #14532d); --user-bg: transparent; --glow: rgba(34, 197, 94, .4); --aura-1: rgba(34, 197, 94, .08); --aura-2: transparent; --accent-soft: rgba(34, 197, 94, .1); --font: 'JetBrains Mono', 'IBM Plex Sans Arabic', ui-monospace, monospace; }
+[data-theme="terminal"] .msg.user .bubble { border: 1px solid #22c55e; box-shadow: none; }
+[data-theme="terminal"] .msg.user .bubble::before { content: '$ '; color: #22c55e; }
+
+/* ---------- Motion + bubble style ---------- */
+[data-motion="on"] .aurora { animation: drift 18s ease-in-out infinite alternate; }
+@keyframes drift {
+  0% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(6%, 4%) scale(1.1); }
+  100% { transform: translate(-5%, 2%) scale(1.05); }
+}
+[data-bubbles="minimal"] .msg.user .bubble { background: none; color: var(--text); box-shadow: none; padding: 0; border: 0; font-weight: 600; }
+[data-bubbles="minimal"] .msg.user { border-inline-start: 3px solid var(--accent); padding-inline-start: 12px; }
+[data-bubbles="minimal"] .avatar { display: none; }
+#bubble-style { align-self: flex-start; }
+
+.color-input { width: 100%; height: 40px; border: 0; padding: 0; background: none; cursor: pointer; border-radius: 8px; }
+.swatch-auto { background-size: 100% 100%; }
+
+/* Answer toolbar stays on one line: the model name gives way first. */
+.meta { flex-wrap: nowrap; }
+.meta .model-tag { min-width: 0; flex-shrink: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.meta .icon-btn { flex-shrink: 0; }
+
+/* Keys: the provider link is a real tap target; on phones the field gets the whole row. */
+.steps a.open-link { display: inline-flex; align-items: center; gap: 4px; padding: 6px 12px; margin-inline-start: 4px; border-radius: 999px; background: var(--accent-soft); border: 1px solid var(--line); text-decoration: none; font-weight: 600; min-height: 36px; }
+@media (max-width: 520px) {
+  .key-row { flex-wrap: wrap; }
+  .key-row input { flex: 1 1 100%; }
+  .key-row .btn-primary { flex: 1; }
+  .keys { grid-template-columns: 1fr; }
+  .key-card { padding: 16px; }
+}

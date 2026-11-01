@@ -53,7 +53,7 @@ const ago = (ms) => {
   if (s < 60) return 'دلوقتي';
   if (s < 3600) return `من ${Math.round(s / 60)} د`;
   if (s < 86400) return `من ${Math.round(s / 3600)} س`;
-  return new Date(ms).toLocaleDateString();
+  return new Date(ms).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'short' });
 };
 
 // --- Dialog and toasts --------------------------------------------------------------------
@@ -565,7 +565,7 @@ const everyText = (d) => (d === 1 ? 'كل يوم' : d === 2 ? 'كل يومين' 
 
 async function loadAutoScan() {
   const st = await api('/api/status');
-  const next = new Date(st.nextScanAt).toLocaleString([], { weekday: 'long', hour: '2-digit', minute: '2-digit' });
+  const next = new Date(st.nextScanAt).toLocaleString('ar-EG-u-nu-latn', { weekday: 'long', hour: 'numeric', minute: '2-digit' });
   $('auto-scan').textContent = st.lastCron
     ? `🟢 بيدوّر لوحده ${everyText(st.everyDays)} · آخر مرة ${ago(st.lastCron.at)} (${st.lastCron.provider}) · الجاية ${next}`
     : `⏳ بيدوّر لوحده ${everyText(st.everyDays)} · أول مرة ${next}`;
@@ -634,7 +634,8 @@ async function loadModels() {
           el('span', { class: `badge ${tone}`, title: m.last_error || '' }, label),
         ),
         el('div', { class: 'badges' },
-          m.arabic_ok === 1 ? el('span', { class: 'badge ok' }, 'عربي ✓') : m.arabic_ok === 0 ? el('span', { class: 'badge bad' }, 'عربي ✗') : null,
+          // The quick test's Arabic check only until the exam gives a real score.
+          m.score_arabic != null ? null : m.arabic_ok === 1 ? el('span', { class: 'badge ok' }, 'عربي ✓') : m.arabic_ok === 0 ? el('span', { class: 'badge bad' }, 'عربي ✗') : null,
           m.latency_ms ? el('span', { class: 'badge' }, `${(m.latency_ms / 1000).toFixed(1)}s`) : null,
           m.context_length ? el('span', { class: 'badge' }, `${Math.round(m.context_length / 1000)}k`) : null,
           m.supports_vision ? el('span', { class: 'badge' }, 'صور') : null,
@@ -833,7 +834,7 @@ async function loadKeys() {
         badge,
       ),
       el('ol', { class: 'steps' },
-        el('li', {}, 'افتح ', el('a', { href: guide.url, target: '_blank', rel: 'noopener noreferrer' }, new URL(guide.url, location.href).host)),
+        el('li', {}, 'افتح ', el('a', { href: guide.url, target: '_blank', rel: 'noopener noreferrer', class: 'open-link', dir: 'ltr' }, `${new URL(guide.url, location.href).host} ↗`)),
         ...guide.steps.map((step) => el('li', { dir: 'auto' }, step)),
         el('li', {}, 'الصقه هنا واضغط احفظ'),
       ),
@@ -1001,38 +1002,118 @@ const THEMES = [
   { id: 'gold', name: 'دهبي', colors: ['#100d05', '#fbbf24', '#b45309'] },
   { id: 'amoled', name: 'أسود AMOLED', colors: ['#000000', '#e5e5e5', '#737373'] },
   { id: 'light', name: 'فاتح', colors: ['#f7f5fc', '#7c3aed', '#4f46e5'] },
+  { id: 'ramadan', name: 'رمضان 🌙', colors: ['#070b1a', '#f5c451', '#b7791f'] },
+  { id: 'cairo', name: 'ليل القاهرة', colors: ['#0b0908', '#ff8a3d', '#c2410c'] },
+  { id: 'terminal', name: 'Terminal', colors: ['#000000', '#22c55e', '#15803d'] },
+  { id: 'auto', name: 'تلقائي 🌗', colors: ['#0c0817', '#a855f7', '#f7f5fc'] },
+  { id: 'custom', name: 'لونك انت 🎨', colors: ['#0c0817', '#a855f7', '#6d28d9'] },
 ];
+
+/** Hex → [r, g, b]. */
+const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+const mix = (a, b, t) => {
+  const [x, y] = [rgb(a), rgb(b)];
+  return `#${x.map((v, i) => Math.round(v + (y[i] - v) * t).toString(16).padStart(2, '0')).join('')}`;
+};
+
+/** A whole dark theme from one colour: tinted background, glass, gradient and glow. */
+function customVars(hex) {
+  const [r, g, b] = rgb(hex);
+  return {
+    '--bg': mix('#07070b', hex, 0.06),
+    '--bg-2': mix('#0e0e14', hex, 0.09),
+    '--glass': `rgba(${rgb(mix('#12121a', hex, 0.12)).join(', ')}, .72)`,
+    '--glass-line': `rgba(${r}, ${g}, ${b}, .12)`,
+    '--line': `rgba(${r}, ${g}, ${b}, .14)`,
+    '--soft': `rgba(${r}, ${g}, ${b}, .07)`,
+    '--accent': mix(hex, '#ffffff', 0.25),
+    '--accent-soft': `rgba(${r}, ${g}, ${b}, .14)`,
+    '--grad': `linear-gradient(135deg, ${hex}, ${mix(hex, '#000000', 0.35)})`,
+    '--user-bg': `linear-gradient(135deg, ${hex}, ${mix(hex, '#000000', 0.45)})`,
+    '--glow': `rgba(${r}, ${g}, ${b}, .5)`,
+    '--aura-1': `rgba(${r}, ${g}, ${b}, .2)`,
+    '--aura-2': `rgba(${rgb(mix(hex, '#3b82f6', 0.5)).join(', ')}, .14)`,
+  };
+}
 
 const pref = {
   get: (k, d) => { try { return localStorage.getItem(k) || d; } catch { return d; } },
   set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
 };
 
+/** 'auto' follows the clock: light from 7:00 to 18:00, dark otherwise. */
+const resolveTheme = (id) => {
+  if (id !== 'auto') return id;
+  const h = new Date().getHours();
+  return h >= 7 && h < 18 ? 'light' : 'purple';
+};
+
 function applyAppearance() {
-  const theme = pref.get('bello-theme', 'purple');
-  document.documentElement.setAttribute('data-theme', theme);
-  document.documentElement.setAttribute('data-size', pref.get('bello-size', 'm'));
-  const bg = THEMES.find((t) => t.id === theme)?.colors[0] || '#0c0817';
+  const root = document.documentElement;
+  const chosen = pref.get('bello-theme', 'purple');
+  const theme = resolveTheme(chosen);
+  root.setAttribute('data-theme', theme);
+  root.setAttribute('data-size', pref.get('bello-size', 'm'));
+  root.setAttribute('data-motion', pref.get('bello-motion', 'off'));
+  root.setAttribute('data-bubbles', pref.get('bello-bubbles', 'bubbles'));
+  const vars = customVars(pref.get('bello-color', '#a855f7'));
+  for (const k of Object.keys(vars)) root.style.removeProperty(k);
+  if (theme === 'custom') for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
+  pref.set('bello-custom-vars', theme === 'custom' ? JSON.stringify(vars) : '');
+  const bg = theme === 'custom' ? vars['--bg'] : THEMES.find((t) => t.id === theme)?.colors[0] || '#0c0817';
   document.querySelector('meta[name="theme-color"]').setAttribute('content', bg);
 }
+setInterval(() => pref.get('bello-theme', '') === 'auto' && applyAppearance(), 10 * 60_000);
 
 function loadSettings() {
   const current = pref.get('bello-theme', 'purple');
   $('themes').replaceChildren(...THEMES.map((t) => {
-    const swatch = el('span', { class: 'swatch' });
-    swatch.style.background = `linear-gradient(135deg, ${t.colors[1]}, ${t.colors[2]})`;
-    const card = el('button', { class: `theme-card ${t.id === current ? 'on' : ''}`, onclick: () => {
+    const swatch = el('span', { class: `swatch swatch-${t.id}` });
+    const colors = t.id === 'custom' ? [t.colors[0], pref.get('bello-color', '#a855f7'), mix(pref.get('bello-color', '#a855f7'), '#000000', 0.35)] : t.colors;
+    swatch.style.background = t.id === 'auto'
+      ? `linear-gradient(135deg, ${colors[2]} 50%, ${colors[1]} 50%)`
+      : `linear-gradient(135deg, ${colors[1]}, ${colors[2]})`;
+    const pick = () => {
       pref.set('bello-theme', t.id);
       applyAppearance();
       loadSettings();
       notify(`✓ ${t.name}`);
-    } }, swatch, el('span', {}, t.name));
-    card.style.background = t.colors[0];
+    };
+    const children = [swatch, el('span', {}, t.name)];
+    if (t.id === 'custom') {
+      const input = el('input', { type: 'color', value: pref.get('bello-color', '#a855f7'), 'aria-label': 'اختار لونك', class: 'color-input' });
+      input.addEventListener('input', () => {
+        pref.set('bello-color', input.value);
+        pref.set('bello-theme', 'custom');
+        applyAppearance();
+        swatch.style.background = `linear-gradient(135deg, ${input.value}, ${mix(input.value, '#000000', 0.35)})`;
+      });
+      input.addEventListener('change', loadSettings);
+      input.addEventListener('click', (e) => e.stopPropagation());
+      children.push(input);
+    }
+    const card = el('button', { class: `theme-card ${t.id === current ? 'on' : ''}`, onclick: pick }, ...children);
+    card.style.background = t.id === 'custom' ? mix('#07070b', colors[1], 0.08) : t.colors[0];
     card.style.color = t.id === 'light' ? '#1e1b2e' : '#f4f2fa';
     return card;
   }));
   const size = pref.get('bello-size', 'm');
   for (const b of $('font-size').querySelectorAll('button')) b.classList.toggle('on', b.dataset.size === size);
+  $('motion-toggle').checked = pref.get('bello-motion', 'off') === 'on';
+  const bubbles = pref.get('bello-bubbles', 'bubbles');
+  for (const b of $('bubble-style').querySelectorAll('button')) b.classList.toggle('on', b.dataset.bubbles === bubbles);
+}
+
+$('motion-toggle').addEventListener('change', () => {
+  pref.set('bello-motion', $('motion-toggle').checked ? 'on' : 'off');
+  applyAppearance();
+});
+for (const b of document.querySelectorAll('#bubble-style button')) {
+  b.addEventListener('click', () => {
+    pref.set('bello-bubbles', b.dataset.bubbles);
+    applyAppearance();
+    loadSettings();
+  });
 }
 
 for (const b of document.querySelectorAll('#font-size button')) {
