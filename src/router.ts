@@ -29,7 +29,8 @@ export interface RouteRequest {
   task: Task;
   /** Rough prompt size in tokens; models with a smaller window are skipped. */
   tokens: number;
-  fastProviders: ReadonlySet<string>;
+  /** Per-provider score adjustment (see Provider.bonus). */
+  providerBonus: ReadonlyMap<string, number>;
   at: number;
 }
 
@@ -55,7 +56,7 @@ export function scoreModel(m: ModelRow, req: RouteRequest): number {
   score += (success - 0.5) * 40;
 
   if (m.latency_ms !== null) score -= Math.min(m.latency_ms / 1000, 10);
-  if (req.fastProviders.has(m.provider)) score += 3;
+  score += req.providerBonus.get(m.provider) ?? 0;
 
   // OpenRouter's own "any free model" router: handy as a last resort only.
   if (m.model === 'openrouter/free') score -= 30;

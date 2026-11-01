@@ -1,4 +1,5 @@
 import type { Env } from './env';
+import { callWorkersAi, discoverWorkersAi } from './workers-ai';
 
 /**
  * How we know a model is free:
@@ -6,8 +7,9 @@ import type { Env } from './env';
  * - 'probe': the provider has a permanent free plan and the key has no billing attached, so a
  *   model that answers the quick test on that key is free. A model the free plan does not
  *   cover answers 402/429 "limit: 0" and is marked paid.
+ * - 'allocation': a daily allocation that fails when used up and can never bill (Workers AI).
  */
-export type FreeBasis = 'catalog' | 'probe';
+export type FreeBasis = 'catalog' | 'probe' | 'allocation';
 
 export interface DiscoveredModel {
   model: string;
@@ -24,11 +26,33 @@ export interface Provider {
   baseUrl: string;
   keyOf: (env: Env) => string | undefined;
   freeBasis: FreeBasis;
-  /** Fast inference hardware; a small bonus when ranking. */
-  fast: boolean;
+  /** Added to every model's score: fast hardware up, a small daily budget down. */
+  bonus: number;
   /** Returns only the chat models that may be free. Paid-only models are dropped here. */
-  discover: (key: string) => Promise<DiscoveredModel[]>;
+  discover: (key: string, env: Env) => Promise<DiscoveredModel[]>;
+  /** For providers that are not an HTTP endpoint; must answer like OpenAI /chat/completions. */
+  call?: (env: Env, body: Record<string, unknown>) => Promise<Response>;
   extraHeaders?: Record<string, string>;
+}
+
+/** POST an OpenAI-style /chat/completions body to any provider. */
+export function callProvider(
+  provider: Provider,
+  env: Env,
+  body: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<Response> {
+  if (provider.call) return provider.call(env, body);
+  return fetch(`${provider.baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${provider.keyOf(env)}`,
+      'content-type': 'application/json',
+      ...provider.extraHeaders,
+    },
+    body: JSON.stringify(body),
+    signal,
+  });
 }
 
 /** Not chat models: speech, embeddings, images, video, moderation. */
@@ -90,7 +114,7 @@ export const PROVIDERS: Provider[] = [
     baseUrl: 'https://api.groq.com/openai/v1',
     keyOf: (env) => env.GROQ_API_KEY,
     freeBasis: 'probe',
-    fast: true,
+    bonus: 3,
     discover: openAiCatalog(
       'https://api.groq.com/openai/v1',
       'Groq free plan key (console.groq.com/settings/limits); answered the quick test',
@@ -102,7 +126,7 @@ export const PROVIDERS: Provider[] = [
     baseUrl: 'https://api.cerebras.ai/v1',
     keyOf: (env) => env.CEREBRAS_API_KEY,
     freeBasis: 'probe',
-    fast: true,
+    bonus: 3,
     discover: openAiCatalog(
       'https://api.cerebras.ai/v1',
       'Cerebras free plan key (cloud.cerebras.ai); answered the quick test',
@@ -114,7 +138,7 @@ export const PROVIDERS: Provider[] = [
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     keyOf: (env) => env.GEMINI_API_KEY,
     freeBasis: 'probe',
-    fast: false,
+    bonus: 0,
     discover: openAiCatalog(
       'https://generativelanguage.googleapis.com/v1beta/openai',
       'Gemini API key without billing (ai.google.dev/gemini-api/docs/rate-limits); answered the quick test',
@@ -127,7 +151,7 @@ export const PROVIDERS: Provider[] = [
     baseUrl: 'https://openrouter.ai/api/v1',
     keyOf: (env) => env.OPENROUTER_API_KEY,
     freeBasis: 'catalog',
-    fast: false,
+    bonus: 0,
     extraHeaders: { 'X-Title': 'Bello AI' },
     discover: async () => {
       const list = await getJson<{ data: OpenRouterModel[] }>('https://openrouter.ai/api/v1/models');
@@ -142,6 +166,19 @@ export const PROVIDERS: Provider[] = [
     },
   },
 ];
+
+PROVIDERS.push({
+  id: 'workers-ai',
+  label: 'Cloudflare Workers AI',
+  baseUrl: '',
+  // No key: the AI binding is the credential. 'binding' only marks it as configured.
+  keyOf: (env) => (env.AI ? 'binding' : undefined),
+  freeBasis: 'allocation',
+  // 10,000 neurons a day is small: keep it as the backup, not the first choice.
+  bonus: -6,
+  discover: (_key, env) => discoverWorkersAi(env),
+  call: callWorkersAi,
+});
 
 export const providerById = (id: string): Provider | undefined =>
   PROVIDERS.find((p) => p.id === id);

@@ -1,7 +1,7 @@
 # Bello AI
 
 A personal AI assistant on a public URL, for one owner, at **$0 a month**.
-It talks to every free model it can find on Groq, Cerebras, Google Gemini and OpenRouter, picks the
+It talks to every free model it can find on Groq, Google Gemini, OpenRouter and Cloudflare Workers AI, picks the
 best one for each message (Arabic or English, code or chat), switches to the next one when a model
 hits its limit, and **adds new free models by itself** as soon as a provider publishes them.
 
@@ -30,6 +30,7 @@ There is no universal list of free models, so every model carries its evidence:
 |---|---|
 | OpenRouter | Its public catalog lists **every** price as `0`. No price, or any non-zero price → ignored. |
 | Groq, Gemini | They have a permanent free plan. Use a key **with no billing attached**: a model the free plan does not cover answers `402` / `429 limit: 0` and is marked *paid*. |
+| Cloudflare Workers AI | Built in, no key: the Workers Free plan's daily allocation (10,000 neurons) fails when used up and never bills. Models limited to paid plans answer `5035` and are marked *paid*. Ranked a little lower so the small budget is kept as backup. |
 | Cerebras | **Leave it off for now.** As of 2026-11 new accounts get trial credits, not a free plan, and a test call cannot tell credits from free. |
 
 > ⚠️ Never put a key from a paid / billing-enabled account here. On such a key every call can cost

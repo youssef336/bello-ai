@@ -1,5 +1,5 @@
 import { type Env, now } from './env';
-import { configuredProviders, guessQuality, type Provider, providerById } from './providers';
+import { callProvider, configuredProviders, guessQuality, type Provider, providerById } from './providers';
 import type { ModelRow } from './router';
 
 const DAY = 24 * 3600_000;
@@ -24,24 +24,20 @@ export interface QuickTestResult {
 }
 
 /** One call checks three things: the model answers, answers in Arabic, and answers correctly. */
-export async function quickTest(provider: Provider, key: string, model: string): Promise<QuickTestResult> {
+export async function quickTest(provider: Provider, env: Env, model: string): Promise<QuickTestResult> {
   const started = now();
   try {
-    const res = await fetch(`${provider.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${key}`,
-        'content-type': 'application/json',
-        ...provider.extraHeaders,
-      },
-      body: JSON.stringify({
+    const res = await callProvider(
+      provider,
+      env,
+      {
         model,
         messages: [{ role: 'user', content: 'أجب بكلمة واحدة باللغة العربية: ما هي عاصمة مصر؟' }],
         max_tokens: 1024,
         temperature: 0,
-      }),
-      signal: AbortSignal.timeout(TEST_TIMEOUT_MS),
-    });
+      },
+      AbortSignal.timeout(TEST_TIMEOUT_MS),
+    );
     const latencyMs = now() - started;
     if (!res.ok) {
       const body = (await res.text()).slice(0, 300);
@@ -104,7 +100,7 @@ export async function scanProvider(env: Env, provider: Provider): Promise<ScanRe
 
   let found;
   try {
-    found = await provider.discover(key);
+    found = await provider.discover(key, env);
   } catch (e) {
     report.error = String(e);
     await logEvent(env, 'scan', null, `${provider.id}: ${report.error}`);
@@ -167,7 +163,7 @@ export async function scanProvider(env: Env, provider: Provider): Promise<ScanRe
   const tests = toTest.results;
   for (let i = 0; i < tests.length && !report.error; i += TEST_CONCURRENCY) {
     const group = tests.slice(i, i + TEST_CONCURRENCY);
-    const results = await Promise.all(group.map((m) => quickTest(provider, key, m.model)));
+    const results = await Promise.all(group.map((m) => quickTest(provider, env, m.model)));
     const stmts: D1PreparedStatement[] = [];
     const t = now();
     group.forEach((m, j) => {
@@ -192,8 +188,10 @@ export async function scanProvider(env: Env, provider: Provider): Promise<ScanRe
             .bind(outcome, t, r.error ?? null, m.id),
           eventStmt(env, outcome, m.id, r.error ?? ''),
         );
+      } else {
+        // Transient (rate limit, outage, timeout): status untouched, tried again next scan.
+        stmts.push(env.DB.prepare('UPDATE models SET last_error = ? WHERE id = ?').bind(r.error ?? null, m.id));
       }
-      // 'transient' (rate limit, provider outage, timeout): untouched, tried again next scan.
     });
     if (stmts.length) await env.DB.batch(stmts);
   }

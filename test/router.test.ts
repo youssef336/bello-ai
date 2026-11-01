@@ -9,7 +9,7 @@ const base: ModelRow = {
   cooldown_strikes: 0, last_error: null, first_seen: 0, last_seen: 0,
 };
 const model = (over: Partial<ModelRow>): ModelRow => ({ ...base, ...over });
-const req = { language: 'en' as const, task: 'general' as const, tokens: 1000, fastProviders: new Set<string>(), at: 1000 };
+const req = { language: 'en' as const, task: 'general' as const, tokens: 1000, providerBonus: new Map<string, number>(), at: 1000 };
 
 describe('detectLanguage', () => {
   it('Egyptian Arabic', () => expect(detectLanguage('عايز اعرف ازاي اعمل ده')).toBe('ar'));

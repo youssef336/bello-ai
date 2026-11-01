@@ -1,5 +1,7 @@
 export interface Env {
   DB: D1Database;
+  /** Cloudflare Workers AI; free daily allocation, no key. */
+  AI?: Ai;
   ASSETS: Fetcher;
   OWNER_PASSWORD_HASH?: string;
   GROQ_API_KEY?: string;

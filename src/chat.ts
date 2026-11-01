@@ -1,6 +1,6 @@
 import { type Env, newId, now, today } from './env';
 import { classifyTask, detectLanguage } from './lang';
-import { configuredProviders, providerById } from './providers';
+import { callProvider, configuredProviders, providerById } from './providers';
 import { cooldownMs, type ModelRow, rankModels } from './router';
 
 const HISTORY_CHARS = 24_000;
@@ -148,7 +148,7 @@ export async function chat(env: Env, ctx: ExecutionContext, input: ChatInput): P
         language: detectLanguage(message),
         task: classifyTask(message),
         tokens: Math.ceil(promptChars / 3),
-        fastProviders: new Set(configuredProviders(env).filter((p) => p.fast).map((p) => p.id)),
+        providerBonus: new Map(configuredProviders(env).map((p) => [p.id, p.bonus])),
         at,
       },
       MAX_ATTEMPTS,
@@ -184,15 +184,7 @@ export async function chat(env: Env, ctx: ExecutionContext, input: ChatInput): P
       const started = now();
       let res: Response;
       try {
-        res = await fetch(`${provider.baseUrl}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            authorization: `Bearer ${provider.keyOf(env)}`,
-            'content-type': 'application/json',
-            ...provider.extraHeaders,
-          },
-          body: JSON.stringify({ model: m.model, messages: turns, stream: true }),
-        });
+        res = await callProvider(provider, env, { model: m.model, messages: turns, stream: true });
       } catch (e) {
         await markFailure(env, m, 0, String(e), null);
         await bumpUsage(env, m.id, 'failures');
