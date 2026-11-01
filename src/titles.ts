@@ -41,12 +41,15 @@ export async function askQuick(
   arabic: boolean,
   maxTokens: number,
   accept: (raw: string) => string | null,
+  /** Last resort: also thinking models and Workers AI, best first instead of fastest. */
+  anyModel = false,
 ): Promise<string | null> {
   const at = Date.now();
   const picks = usable
-    .filter((m) => !m.paid && !THINKS.test(m.model) && m.cooldown_until <= at && m.provider !== 'workers-ai')
-    .filter((m) => !arabic || m.arabic_ok === 1)
-    .sort((a, b) => (a.latency_ms ?? 9e9) - (b.latency_ms ?? 9e9))
+    .filter((m) => !m.paid && m.cooldown_until <= at)
+    .filter((m) => anyModel || (!THINKS.test(m.model) && m.provider !== 'workers-ai' && (!arabic || m.arabic_ok === 1)))
+    .filter((m) => !anyModel || m.arabic_ok !== 0)
+    .sort((a, b) => (anyModel ? b.quality - a.quality : (a.latency_ms ?? 9e9) - (b.latency_ms ?? 9e9)))
     .slice(0, TRY_MODELS);
   for (const m of picks) {
     try {

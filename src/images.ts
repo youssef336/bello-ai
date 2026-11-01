@@ -23,7 +23,7 @@ const SCHNELL = '@cf/black-forest-labs/flux-1-schnell';
 export const IMAGE_MODEL_NAMES: Record<string, string> = { [KLEIN]: 'FLUX.2 klein', [SCHNELL]: 'FLUX.1 schnell' };
 
 const MAX_INPUTS = 4;
-const MAX_INPUT_CHARS = 700_000;
+const MAX_INPUT_CHARS = 1_000_000;
 const MAX_PROMPT = 2_000;
 const LONG_SIDE = 1024;
 const INPUT = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/]+=*)$/;
@@ -81,15 +81,23 @@ export function cleanPrompt(raw: string): string | null {
 async function englishPrompt(env: Env, user: User, request: string, editing: boolean): Promise<string> {
   if (detectLanguage(request) !== 'ar') return request;
   const keys = await keysFor(env, user);
+  // Pictures already run on the owner's Workers AI, so its chat models may word the prompt too.
+  if (env.AI) keys.set('workers-ai', 'binding');
   const models = await env.DB.prepare(`SELECT * FROM models WHERE status = 'active' AND paid = 0`).all<ModelRow>();
   const usable = models.results.filter((m) => keys.has(m.provider));
-  const ask = `Rewrite this request as one clear English prompt for an image model${
-    editing ? ' that edits the attached picture(s); write it as an edit instruction and refer to pictures as image 0, image 1…' : ''
-  }. Keep every detail: people, objects, colours, style, mood. Any text that must appear inside the picture stays in its original language, in quotes. Reply with the prompt only.\n\nRequest:\n${request}`;
-  return (await askQuick(usable, keys, env, ask, true, 300, cleanPrompt)) ?? request;
+  const ask = editing
+    ? `Rewrite this request as one short English instruction for an image model that edits the attached picture(s). Say exactly what to change, then "keep everything else the same". Refer to pictures as image 0, image 1… only when there are several. Text that must appear in the picture stays in its original language, in quotes. Reply with the instruction only.\n\nRequest:\n${request}`
+    : `Rewrite this request as one clear English prompt for an image model. Keep every detail it gives (people, objects, colours, style, mood) and add nothing it does not ask for. Text that must appear in the picture stays in its original language, in quotes. Reply with the prompt only.\n\nRequest:\n${request}`;
+  // Sent as Arabic, an edit is only half done (tested: "a red hat instead of the glasses" added
+  // the hat and kept the glasses), so a slower model is worth it when no fast one answers.
+  return (await askQuick(usable, keys, env, ask, true, 300, cleanPrompt))
+    ?? (await askQuick(usable, keys, env, ask, true, 1500, cleanPrompt, true))
+    ?? request;
 }
 
 class DailyAllocationUsed extends Error {}
+/** The docs ask for input pictures under 512 px; larger ones work today and keep more detail. */
+class InputTooLarge extends Error {}
 
 async function runKlein(env: Env, prompt: string, inputs: Blob[], size: { width: number; height: number }) {
   const form = new FormData();
@@ -122,6 +130,7 @@ async function draw(env: Env, prompt: string, inputs: Blob[], aspect: number): P
     } catch (e) {
       const message = String(e instanceof Error ? e.message : e);
       if (/4006|daily free allocation|neurons/i.test(message)) throw new DailyAllocationUsed(message);
+      if (inputs.length && /512|too large|dimension|resolution|image size/i.test(message)) throw new InputTooLarge(message);
       console.error('image', model, message);
       last = e;
     }
@@ -154,6 +163,7 @@ export async function makeImage(env: Env, user: User, req: ImageRequest): Promis
   } catch (e) {
     await refund(env, user, 'images');
     if (e instanceof DailyAllocationUsed) return allocationUsed();
+    if (e instanceof InputTooLarge) return json({ error: 'الصورة كبيرة على الموديل', smaller: true }, 413);
     return error(502, 'ماعرفتش أعمل الصورة دي. جرّب توصفها بشكل تاني، أو استنى دقيقة.');
   }
 

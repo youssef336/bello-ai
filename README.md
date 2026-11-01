@@ -38,8 +38,12 @@ hits its limit, and **adds new free models by itself** as soon as a provider pub
   ("خلّي الخلفية بحر", "put the dog from image 1 next to her"). Runs on Cloudflare Workers AI's free
   allocation: FLUX.2 [klein] draws and edits (≈ 130 neurons a picture), FLUX.1 [schnell] is the
   backup. Arabic requests are rewritten as an English prompt by a fast free model first. Every
-  drawn picture has **download** and **edit this** under it, so edits can go round after round.
-  A message that starts with "ارسم…" / "draw…" draws by itself.
+  drawn picture has **download**, **edit this** and one-tap edits (remove background, enhance,
+  cartoon, black & white, night) under it.
+  No button needed, like ChatGPT: send a photo with "شيل الخلفية" / "make it a cartoon" and it is
+  edited; "خليها ليل" right after a picture edits that one; "ارسم…" / "draw…" draws; a question
+  about a photo ("إيه اللي في الصورة؟") still goes to chat. Photos go in at 1024 px (FLUX's
+  documented limit is 512; it accepts 1024 today, and the app falls back to 511 if that changes).
 - **Video** (الفيديو): trim, reframe (9:16 · 1:1 · 16:9), resize and mute on the device with
   [Mediabunny](https://mediabunny.dev) (WebCodecs, nothing is uploaded); **AI subtitles** with
   Whisper large-v3-turbo on Workers AI (≈ 47 neurons a minute) that you can correct before they

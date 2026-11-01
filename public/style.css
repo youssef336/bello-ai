@@ -642,3 +642,5 @@ tr + tr td { border-top: 1px solid var(--line); }
   .draw-size { padding-inline-start: 4px; }
   .draw-size select { max-width: 92px; }
 }
+.edit-presets { display: flex; gap: 6px; flex-wrap: wrap; }
+.edit-presets .quick-chip { font-size: 12px; }

@@ -12,7 +12,7 @@ async function api(path, options = {}) {
     throw new Error('login required');
   }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(errorText(data, res.status));
+  if (!res.ok) throw Object.assign(new Error(errorText(data, res.status)), { data });
   return data;
 }
 
@@ -449,6 +449,8 @@ function drawnNode(atts) {
       el('a', { class: 'btn-ghost', href: a.data, download: a.name }, '⬇️ نزّلها'),
       el('button', { type: 'button', class: 'btn-ghost', onclick: () => editPicture(a.data, a.name) }, '✏️ عدّلها'),
     ),
+    el('div', { class: 'edit-presets' }, ...EDIT_PRESETS.map(([label, prompt]) =>
+      el('button', { type: 'button', class: 'quick-chip', onclick: () => sendImage(prompt, [{ type: 'image', name: a.name, data: a.data }]) }, label))),
   )));
 }
 
@@ -550,6 +552,13 @@ function renderTray() {
     return el('div', { class: `att ${a.busy ? 'busy' : ''}`, title: a.name },
       a.busy ? '⏳' : '📄', el('span', { class: 'name', dir: 'auto' }, a.name), remove);
   }));
+  // A picture in the tray: the shortcuts become one-tap edits, and the hint says it can edit.
+  renderQuick();
+  if (!state.draw) {
+    $('input').placeholder = count('image') && session.me?.media
+      ? 'اسأل عن الصورة، أو قول تعمل فيها إيه: شيل الخلفية، خليها كرتون…'
+      : 'اكتب رسالتك…';
+  }
 }
 
 /** Pictures go up as JPEG, at most 1280 px on the long side: small enough for every provider. */
@@ -750,17 +759,22 @@ $('composer').addEventListener('submit', (e) => {
   const text = $('input').value.trim();
   if ((!text && !pending.length) || state.controller) return;
   if (pending.some((a) => a.busy)) return notify('استنى الملفات تخلص قراية');
-  // "ارسم…" / "draw…" at the start of a message draws, like ChatGPT does.
-  const drawing = state.draw || (session.me?.media && !state.compare && !state.web && DRAW_REQUEST.test(text)
-    && !pending.some((a) => a.type === 'file'));
-  if (drawing) {
+  // Like ChatGPT: "ارسم…" draws; a picture plus "شيل الخلفية" edits it; "خليها ليل" right after
+  // a picture edits that one. A question about a picture still goes to chat.
+  const files = pending.some((a) => a.type === 'file');
+  const media = session.me?.media && !state.compare && !state.web && !files;
+  const newDrawing = DRAW_REQUEST.test(text);
+  const editing = media && text && !newDrawing && wantsEdit(text);
+  const recent = count('image') ? null : recentPicture();
+  if (state.draw || (media && newDrawing) || (editing && (count('image') || recent))) {
     if (!text) return notify(count('image') ? 'اكتب التعديل اللي عايزه' : 'اكتب وصف الصورة');
-    if (pending.some((a) => a.type === 'file')) return notify('الرسم والتعديل بياخدوا صور بس، من غير ملفات');
-    const images = pending.splice(0);
+    if (files) return notify('الرسم والتعديل بياخدوا صور بس، من غير ملفات');
+    // With an empty tray, an edit applies to the picture just above; a description draws anew.
+    const images = count('image') ? pending.splice(0) : editing && recent ? [recent] : [];
     renderTray();
     $('input').value = '';
     autosize();
-    return sendImage(text, images);
+    return sendImage(text, images, { onRecent: Boolean(images.length && images[0] === recent) });
   }
   const attachments = pending.splice(0).map(({ type, name, data, text: t }) => (type === 'image' ? { type, name, data } : { type, name, text: t }));
   renderTray();
@@ -802,18 +816,67 @@ async function stream(body, onEvent) {
 // --- Pictures: draw or edit --------------------------------------------------------------
 
 const DRAW_REQUEST = /^\s*(ارسم|ارسملي|إرسم|اعمل(لي| لي)? صور[ةه]|اعمللي صور[ةه]|صمم(لي| لي)? صور[ةه]|ولّ?د صور[ةه]|(please )?(draw|paint)\b|(generate|create|make) (me )?an? (image|picture|photo|drawing))/i;
-/** FLUX takes input pictures under 512 px. */
-const EDIT_INPUT_PX = 511;
+/**
+ * Pictures to edit go up at 1024 px, which FLUX accepts today and which keeps faces and text
+ * sharper. Its documented limit is under 512 px: if it ever refuses, they go again at 511.
+ */
+const EDIT_INPUT_PX = 1024;
+const SAFE_INPUT_PX = 511;
 
-async function sendImage(text, images) {
+/** Ready-made edits: under every drawn picture, and as shortcuts when a picture is attached. */
+const EDIT_PRESETS = [
+  ['🧹 شيل الخلفية', 'شيل الخلفية وخليها أبيض سادة، وسيب الشخص أو الحاجة اللي في النص زي ما هي'],
+  ['✨ حسّنها', 'حسّن الإضاءة والألوان والوضوح من غير ما تغيّر أي حاجة في الصورة'],
+  ['🎨 كرتون', 'حوّل الصورة لرسمة كرتون بألوان زاهية، بنفس الأشخاص والتكوين'],
+  ['🖤 أبيض وأسود', 'خلّي الصورة أبيض وأسود بشكل سينمائي'],
+  ['🌙 ليل', 'خلّي الجو ليل والقمر طالع، وسيب كل حاجة تانية زي ما هي'],
+];
+
+/** Polite openings that come before the actual request. */
+const POLITE = /^(ممكن|لو سمحت|من فضلك|please|can you|could you|عايز(ك|ه)?|عاوز(ك|ه)?|محتاج(ك)?|نفسي|يا ريت)\s+/i;
+/** Arabic letters are not \w, so word ends are spelled out. */
+const END = '(?=$|[\\s،,.!؟?])';
+const ASKING = new RegExp(`[؟?]\\s*$|^(ايه|إيه|ليه|مين|فين|امتى|إمتى|كام|هل|ازاي|إزاي|what|why|who|where|when|how|which|is|are|does|do|can)${END}|اشرح|وصف|اوصف|ترجم|لخ[ّ]?ص|ملخص|اقر[اأ]|\\b(explain|describe|translate|summari[sz]e|summary|read)\\b`, 'i');
+const EDIT_VERB = new RegExp(`^(خل[ّ]?ي\\S*|غي[ّ]?ر\\S*|شيل\\S*|امسح\\S*|ا?ضيف\\S*|أضف|زو[ّ]?د\\S*|حط\\S*|حو[ّ]?ل\\S*|لو[ّ]?ن\\S*|بد[ّ]?ل\\S*|رك[ّ]?ب\\S*|صل[ّ]?ح\\S*|حس[ّ]?ن\\S*|نض[ّ]?ف\\S*|قص(ها|ه|يها)?|كب[ّ]?ر\\S*|صغ[ّ]?ر\\S*|عد[ّ]?ل\\S*|اجعل\\S*|[أا]زل\\S*|لب[ّ]?س\\S*|make|change|remove|add|replace|turn|put|edit|fix|enhance|convert|erase|swap|give|transform|colou?r)${END}`, 'i');
+
+/** "Do something to the picture" rather than "tell me about it". */
+function wantsEdit(text) {
+  const t = text.trim().replace(POLITE, '').replace(POLITE, '');
+  if (!t || ASKING.test(t)) return false;
+  // "اعمل فيها…" / "اعمل عليها…" is an edit; "اعملي خطة" is not.
+  if (/^اعمل\S*\s/.test(t) && /\s(فيها|فيه|عليها|عليه|ليها|منها)(\s|$)|الصور[ةه]/.test(t)) return true;
+  // "تشيل" / "تخلي" after "ممكن" or "عايزك" are the same verbs.
+  return t.split(/\s+/).slice(0, 3).some((w) => EDIT_VERB.test(w) || EDIT_VERB.test(w.replace(/^ت/, '')));
+}
+
+/** The newest picture in the last few messages (drawn or sent), for "now make it…" follow-ups. */
+function recentPicture() {
+  for (const node of [...$('messages').children].slice(-4).reverse()) {
+    const img = [...node.querySelectorAll('.drawn img, .msg-atts img')].pop();
+    if (img) return { type: 'image', name: img.alt || 'صورة', data: img.src };
+  }
+  return null;
+}
+
+async function sendImage(text, images, { onRecent = false } = {}) {
   if (state.controller) return;
   await state.keepCompared?.();
   $('empty').hidden = true;
-  const inputs = await Promise.all(images.map(async (a) => shrinkImage(await loadImage(a.data), EDIT_INPUT_PX)));
+  const shrink = (px) => Promise.all(images.map(async (a) => shrinkImage(await loadImage(a.data), px)));
+  let inputs = await shrink(EDIT_INPUT_PX);
   const first = images.length ? await loadImage(inputs[0]) : null;
   const aspect = first ? first.naturalWidth / first.naturalHeight : Number($('draw-size').value);
-  $('messages').append(messageNode({ role: 'user', content: text, attachments: inputs.map((data, i) => ({ type: 'image', name: images[i].name, data })) }));
-  const answer = { role: 'assistant', content: '', notice: images.length ? 'بعدّل الصورة… (حوالي 10 ثواني)' : 'برسم الصورة… (حوالي 10 ثواني)' };
+  // Editing the picture just above: it is already on screen, so only the words go in the bubble.
+  $('messages').append(messageNode({
+    role: 'user',
+    content: text,
+    attachments: onRecent ? [] : inputs.map((data, i) => ({ type: 'image', name: images[i].name, data })),
+  }));
+  const answer = {
+    role: 'assistant',
+    content: '',
+    notice: !images.length ? 'برسم الصورة… (حوالي 10 ثواني)' : onRecent ? 'بعدّل الصورة اللي فوق… (حوالي 10 ثواني)' : 'بعدّل الصورة… (حوالي 10 ثواني)',
+  };
   const node = messageNode(answer);
   $('messages').append(node);
   scrollDown(true);
@@ -822,10 +885,15 @@ async function sendImage(text, images) {
   $('send').hidden = true;
   $('stop').hidden = false;
   try {
-    const out = await api('/api/images', {
+    const request = () => api('/api/images', {
       method: 'POST',
       body: JSON.stringify({ prompt: text, images: inputs, aspect, conversationId: state.conversationId }),
       signal: state.controller.signal,
+    });
+    const out = await request().catch(async (err) => {
+      if (!err.data?.smaller) throw err;
+      inputs = await shrink(SAFE_INPUT_PX);
+      return request();
     });
     conversationEvent('conversation', { id: out.conversationId }, `🎨 ${text}`);
     const done = messageNode(out.message);
@@ -1570,6 +1638,19 @@ const QUICK = [
 ];
 
 function renderQuick() {
+  const pictures = count('image') && !pending.some((a) => a.type === 'file' || a.busy) && session.me?.media;
+  if (pictures) {
+    return $('quick').replaceChildren(...EDIT_PRESETS.map(([label, prompt]) => el('button', {
+      type: 'button',
+      class: 'quick-chip',
+      onclick: () => {
+        if (state.controller) return;
+        const images = pending.splice(0);
+        renderTray();
+        sendImage(prompt, images);
+      },
+    }, label)));
+  }
   $('quick').replaceChildren(...QUICK.map((q) => el('button', {
     type: 'button',
     class: 'quick-chip',
