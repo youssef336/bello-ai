@@ -12,8 +12,7 @@
     {
       "binding": "DB",
       "database_name": "bello-ai",
-      // Replace with the id printed by: npx wrangler d1 create bello-ai
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "83332107-e5dc-41dc-bbf7-b249c7b49c1a",
       "migrations_dir": "migrations"
     }
   ],
