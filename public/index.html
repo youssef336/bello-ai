@@ -2,84 +2,149 @@
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#0c0817">
   <title>Bello AI</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
   <link rel="stylesheet" href="/style.css">
   <script type="module" src="/app.js"></script>
 </head>
 <body>
+  <div class="aurora" aria-hidden="true"></div>
+
   <section id="login" class="login" hidden>
-    <form id="login-form" class="card">
+    <form id="login-form" class="login-card glass">
+      <img src="/icon.svg" alt="" class="logo-lg">
       <h1>Bello AI</h1>
-      <p class="muted">مساعدك الشخصي — كل الموديلات المجانية في مكان واحد</p>
+      <p class="muted">كل الموديلات المجانية في مساعد واحد</p>
       <input id="password" type="password" autocomplete="current-password" placeholder="كلمة السر" required>
-      <button type="submit">دخول</button>
+      <button type="submit" class="btn-primary">دخول</button>
       <p id="login-error" class="error" hidden></p>
     </form>
   </section>
 
   <div id="app" class="app" hidden>
+    <div id="scrim" class="scrim"></div>
     <aside id="sidebar" class="sidebar">
-      <div class="brand">Bello AI</div>
-      <button id="new-chat" class="primary">+ محادثة جديدة</button>
-      <nav class="tabs">
-        <button data-view="chat" class="active">المحادثات</button>
-        <button data-view="models">الموديلات</button>
-        <button data-view="memory">الذاكرة</button>
-        <button data-view="activity">النشاط</button>
+      <div class="brand">
+        <img src="/icon.svg" alt="" class="logo">
+        <span>Bello <b>AI</b></span>
+      </div>
+
+      <button id="new-chat" class="btn-new">
+        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+        محادثة جديدة
+      </button>
+
+      <nav class="nav">
+        <button data-view="chat" class="active">
+          <svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z"/></svg>المحادثات
+        </button>
+        <button data-view="models">
+          <svg viewBox="0 0 24 24"><path d="M12 2 3 7l9 5 9-5-9-5ZM3 12l9 5 9-5M3 17l9 5 9-5"/></svg>الموديلات
+        </button>
+        <button data-view="memory">
+          <svg viewBox="0 0 24 24"><path d="M9.5 2A2.5 2.5 0 0 0 7 4.5v.2A3 3 0 0 0 4.4 9 3 3 0 0 0 5 14.3 3 3 0 0 0 9.5 19a2.5 2.5 0 0 0 2.5 2.5V4.5A2.5 2.5 0 0 0 9.5 2ZM14.5 2A2.5 2.5 0 0 1 17 4.5v.2A3 3 0 0 1 19.6 9a3 3 0 0 1-.6 5.3 3 3 0 0 1-4.5 4.7 2.5 2.5 0 0 1-2.5 2.5"/></svg>الذاكرة
+        </button>
+        <button data-view="activity">
+          <svg viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>النشاط
+        </button>
       </nav>
+
+      <div class="section-label" id="history-label">الأخيرة</div>
       <ul id="conversations" class="conversations"></ul>
+
       <div class="sidebar-foot">
-        <a href="/api/export" class="link">تصدير كل البيانات</a>
-        <button id="logout" class="link">خروج</button>
+        <a href="/api/export" class="foot-link">
+          <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/></svg>تصدير
+        </a>
+        <button id="logout" class="foot-link">
+          <svg viewBox="0 0 24 24"><path d="M15 12H3m0 0 4-4m-4 4 4 4M13 4h6a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6"/></svg>خروج
+        </button>
       </div>
     </aside>
 
     <main>
       <header class="topbar">
-        <button id="menu" class="icon" aria-label="القائمة">☰</button>
+        <button id="menu" class="icon-btn" aria-label="القائمة">
+          <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
+        </button>
         <span id="title" class="title">محادثة جديدة</span>
+        <span id="status-pill" class="pill"><i class="dot"></i><span id="status-text">…</span></span>
       </header>
 
-      <section id="view-chat" class="view">
+      <section id="view-chat" class="view chat-view">
         <div id="messages" class="messages">
           <div id="empty" class="empty">
-            <h2>أهلاً 👋</h2>
-            <p class="muted">اكتب أي حاجة بالعربي أو الإنجليزي — Bello هيختار أحسن موديل مجاني متاح.</p>
+            <img src="/icon.svg" alt="" class="logo-xl">
+            <h2>أهلاً، أقدر أساعدك في إيه؟</h2>
+            <p class="muted">بختار أحسن موديل مجاني لكل رسالة، ولو واحد وقع بكمّل على اللي بعده.</p>
+            <div class="suggestions">
+              <button class="chip" data-prompt="اشرحلي الفرق بين Riverpod و Bloc في Flutter بشكل مختصر">💡 Riverpod ولا Bloc؟</button>
+              <button class="chip" data-prompt="اكتبلي رسالة إيميل محترمة أطلب فيها إجازة يومين">✉️ إيميل إجازة</button>
+              <button class="chip" data-prompt="Review this function for bugs and suggest improvements:\n\n```dart\n\n```">🧑‍💻 Review code</button>
+              <button class="chip" data-prompt="اعملي خطة مذاكرة لمدة أسبوع لتعلم TypeScript">📅 خطة مذاكرة</button>
+            </div>
           </div>
         </div>
-        <form id="composer" class="composer">
-          <select id="model-pick" aria-label="الموديل"><option value="auto">تلقائي</option></select>
-          <textarea id="input" rows="1" dir="auto" placeholder="اكتب رسالتك…" required></textarea>
-          <button id="send" type="submit" class="primary">إرسال</button>
-          <button id="stop" type="button" hidden>إيقاف</button>
-        </form>
+
+        <div class="composer-wrap">
+          <form id="composer" class="composer glass">
+            <textarea id="input" rows="1" dir="auto" placeholder="اكتب رسالتك…" required></textarea>
+            <div class="composer-bar">
+              <label class="model-select">
+                <svg viewBox="0 0 24 24"><path d="M12 3l1.9 5.8H20l-4.9 3.6 1.9 5.8-5-3.6-5 3.6 1.9-5.8L4 8.8h6.1Z"/></svg>
+                <select id="model-pick" aria-label="الموديل"><option value="auto">تلقائي</option></select>
+              </label>
+              <span class="hint">Enter للإرسال · Shift+Enter لسطر جديد</span>
+              <button id="send" type="submit" class="send" aria-label="إرسال">
+                <svg viewBox="0 0 24 24"><path d="M12 19V5m0 0-6 6m6-6 6 6"/></svg>
+              </button>
+              <button id="stop" type="button" class="send stop" aria-label="إيقاف" hidden>
+                <svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>
+              </button>
+            </div>
+          </form>
+        </div>
       </section>
 
-      <section id="view-models" class="view" hidden>
-        <div class="toolbar">
-          <p class="muted">بيتعمل scan تلقائي كل 3 ساعات. أي موديل مجاني جديد بيتجرّب ويتضاف لوحده.</p>
+      <section id="view-models" class="view page" hidden>
+        <div class="page-head">
+          <div>
+            <h2>الموديلات</h2>
+            <p class="muted">Scan تلقائي كل 3 ساعات — أي موديل مجاني جديد بيتجرّب ويتضاف لوحده.</p>
+          </div>
           <div id="scan-buttons" class="row"></div>
         </div>
-        <p id="scan-result" class="muted"></p>
-        <div class="table-wrap"><table id="models-table"></table></div>
+        <div id="stats" class="stats"></div>
+        <p id="scan-result" class="toast" hidden></p>
+        <div id="models-grid" class="cards"></div>
       </section>
 
-      <section id="view-memory" class="view" hidden>
-        <form id="memory-form" class="row">
-          <input id="memory-input" dir="auto" maxlength="2000" placeholder="حاجة عايز Bello يفتكرها عنك…" required>
-          <label class="check"><input id="memory-pinned" type="checkbox"> دايماً</label>
-          <button type="submit" class="primary">حفظ</button>
+      <section id="view-memory" class="view page" hidden>
+        <div class="page-head">
+          <div>
+            <h2>الذاكرة</h2>
+            <p class="muted">حاجات عنك. المثبّتة بتتبعت دايماً، والباقي بس لما يكون ليه علاقة بالسؤال.</p>
+          </div>
+        </div>
+        <form id="memory-form" class="memory-form glass">
+          <input id="memory-input" dir="auto" maxlength="2000" placeholder="مثلاً: بشتغل Flutter وبحب الردود المختصرة" required>
+          <label class="toggle"><input id="memory-pinned" type="checkbox"><span></span>تثبيت</label>
+          <button type="submit" class="btn-primary">حفظ</button>
         </form>
         <ul id="memory-list" class="list"></ul>
       </section>
 
-      <section id="view-activity" class="view" hidden>
-        <h3>الاستخدام (آخر 7 أيام)</h3>
-        <div class="table-wrap"><table id="usage-table"></table></div>
+      <section id="view-activity" class="view page" hidden>
+        <div class="page-head"><div><h2>النشاط</h2><p class="muted">الاستخدام آخر 7 أيام وسجل الاكتشاف.</p></div></div>
+        <div class="panel glass"><div class="table-wrap"><table id="usage-table"></table></div></div>
         <h3>سجل الاكتشاف</h3>
-        <ul id="events" class="list"></ul>
+        <ul id="events" class="timeline"></ul>
       </section>
     </main>
   </div>

@@ -159,7 +159,7 @@ const SECURITY_HEADERS: Record<string, string> = {
   'referrer-policy': 'no-referrer',
   'x-frame-options': 'DENY',
   'content-security-policy':
-    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'",
+    "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
 };
 
 export default {
