@@ -33,7 +33,7 @@ export interface Provider {
 
 /** Not chat models: speech, embeddings, images, video, moderation. */
 const NOT_CHAT =
-  /whisper|tts|speech|audio|embed|guard|moderation|safety|imagen|image-generation|veo|lyria|playai|orpheus|transcribe|aqa|live|robotics|computer-use|-image\b/i;
+  /whisper|tts|speech|audio|embed|guard|moderation|safety|imagen|image-generation|veo|lyria|playai|orpheus|transcribe|aqa|live|robotics|computer-use|nano-banana|-image\b/i;
 
 async function getJson<T>(url: string, key?: string): Promise<T> {
   const res = await fetch(url, key ? { headers: { authorization: `Bearer ${key}` } } : {});

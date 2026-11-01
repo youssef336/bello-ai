@@ -8,6 +8,10 @@ const DAY = 24 * 3600_000;
  * plus one D1 batch, so 12 tests stay well inside with room for listing and bookkeeping.
  */
 const MAX_TESTS_PER_RUN = 12;
+/** Slow "thinking" models get this long to answer the quick test. */
+const TEST_TIMEOUT_MS = 30_000;
+/** Tests run in small parallel groups so a scan finishes in about a minute. */
+const TEST_CONCURRENCY = 4;
 /** A model missing from the catalog for longer than this is marked removed. */
 const REMOVE_AFTER_MS = 12 * 3600_000;
 
@@ -36,6 +40,7 @@ export async function quickTest(provider: Provider, key: string, model: string):
         max_tokens: 1024,
         temperature: 0,
       }),
+      signal: AbortSignal.timeout(TEST_TIMEOUT_MS),
     });
     const latencyMs = now() - started;
     if (!res.ok) {
@@ -51,6 +56,22 @@ export async function quickTest(provider: Provider, key: string, model: string):
   } catch (e) {
     return { ok: false, paid: false, arabic: false, latencyMs: now() - started, error: String(e) };
   }
+}
+
+export type FailureKind = 'bad-key' | 'paid' | 'failed' | 'transient';
+
+/** Why a quick test failed decides what happens to the model. */
+export function classifyFailure(r: QuickTestResult): FailureKind | null {
+  if (r.ok) return null;
+  if (r.paid) return 'paid';
+  if (r.error === 'empty answer') return 'failed';
+  const status = Number(/^HTTP (\d{3})/.exec(r.error ?? '')?.[1] ?? 0);
+  const body = r.error ?? '';
+  if (status === 401) return 'bad-key';
+  // 403 is also used for "this model is not available to you"; only a key complaint is the key.
+  if (status === 403 && /api.?key|unauthori[sz]ed|invalid.*(key|token)|authentication/i.test(body)) return 'bad-key';
+  if (status === 429 || status >= 500 || status === 0) return 'transient';
+  return 'failed';
 }
 
 function eventStmt(env: Env, kind: string, modelId: string | null, detail: string): D1PreparedStatement {
@@ -143,38 +164,38 @@ export async function scanProvider(env: Env, provider: Provider): Promise<ScanRe
     .bind(provider.id, at - DAY, at - 7 * DAY, MAX_TESTS_PER_RUN)
     .all<ModelRow>();
 
-  for (const m of toTest.results) {
-    const r = await quickTest(provider, key, m.model);
+  const tests = toTest.results;
+  for (let i = 0; i < tests.length && !report.error; i += TEST_CONCURRENCY) {
+    const group = tests.slice(i, i + TEST_CONCURRENCY);
+    const results = await Promise.all(group.map((m) => quickTest(provider, key, m.model)));
+    const stmts: D1PreparedStatement[] = [];
     const t = now();
-    if (r.ok) {
-      const stmts = [
-        env.DB.prepare(
+    group.forEach((m, j) => {
+      const r = results[j]!;
+      const outcome = classifyFailure(r);
+      if (r.ok) {
+        stmts.push(env.DB.prepare(
           `UPDATE models SET status = 'active', verified_at = ?, tested_at = ?, arabic_ok = ?,
              latency_ms = ?, ok_count = ok_count + 1, last_error = NULL WHERE id = ?`,
-        ).bind(t, t, r.arabic ? 1 : 0, r.latencyMs, m.id),
-      ];
-      if (m.status === 'candidate') {
-        report.added.push(m.id);
-        stmts.push(eventStmt(env, 'added', m.id,
-          `${m.free_evidence ?? ''}${r.arabic ? '' : ' · weak Arabic'}`));
+        ).bind(t, t, r.arabic ? 1 : 0, r.latencyMs, m.id));
+        if (m.status === 'candidate') {
+          report.added.push(m.id);
+          stmts.push(eventStmt(env, 'added', m.id, `${m.free_evidence ?? ''}${r.arabic ? '' : ' · weak Arabic'}`));
+        }
+      } else if (outcome === 'bad-key') {
+        // The key itself was rejected: no model is at fault, so nothing is marked.
+        report.error = `API key rejected (${r.error?.slice(0, 120)})`;
+      } else if (outcome === 'paid' || outcome === 'failed') {
+        (outcome === 'paid' ? report.paid : report.failed).push(m.id);
+        stmts.push(
+          env.DB.prepare(`UPDATE models SET status = ?, tested_at = ?, last_error = ? WHERE id = ?`)
+            .bind(outcome, t, r.error ?? null, m.id),
+          eventStmt(env, outcome, m.id, r.error ?? ''),
+        );
       }
-      await env.DB.batch(stmts);
-    } else if (/^HTTP 40[13]\b/.test(r.error ?? '')) {
-      // The key was rejected: the model is not at fault, and every other test would fail the same way.
-      report.error = `API key rejected (${r.error?.slice(0, 120)})`;
-      break;
-    } else if (r.error?.startsWith('HTTP 429') && !r.paid) {
-      // Just rate limited: leave it as is and try again next scan.
-      continue;
-    } else {
-      const status = r.paid ? 'paid' : 'failed';
-      (r.paid ? report.paid : report.failed).push(m.id);
-      await env.DB.batch([
-        env.DB.prepare(`UPDATE models SET status = ?, tested_at = ?, last_error = ? WHERE id = ?`)
-          .bind(status, t, r.error ?? null, m.id),
-        eventStmt(env, status, m.id, r.error ?? ''),
-      ]);
-    }
+      // 'transient' (rate limit, provider outage, timeout): untouched, tried again next scan.
+    });
+    if (stmts.length) await env.DB.batch(stmts);
   }
   await logEvent(env, 'scan', null,
     `${provider.id}: ${report.found} free, +${report.added.length} added, -${report.removed.length} removed` +

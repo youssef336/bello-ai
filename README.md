@@ -29,7 +29,8 @@ There is no universal list of free models, so every model carries its evidence:
 | Provider | How it is known to be free |
 |---|---|
 | OpenRouter | Its public catalog lists **every** price as `0`. No price, or any non-zero price → ignored. |
-| Groq, Cerebras, Gemini | They have a permanent free plan. Use a key **with no billing attached**: a model the free plan does not cover answers `402` / `429 limit: 0` and is marked *paid*. |
+| Groq, Gemini | They have a permanent free plan. Use a key **with no billing attached**: a model the free plan does not cover answers `402` / `429 limit: 0` and is marked *paid*. |
+| Cerebras | **Leave it off for now.** As of 2026-11 new accounts get trial credits, not a free plan, and a test call cannot tell credits from free. |
 
 > ⚠️ Never put a key from a paid / billing-enabled account here. On such a key every call can cost
 > money and the app cannot tell the difference.
@@ -63,7 +64,7 @@ Then open **الموديلات → Scan** for each provider once (after that the
    ```bash
    npx wrangler secret put OWNER_PASSWORD_HASH
    npx wrangler secret put GROQ_API_KEY        # console.groq.com
-   npx wrangler secret put CEREBRAS_API_KEY    # cloud.cerebras.ai
+   # CEREBRAS_API_KEY: skip, trial credits only (see above)
    npx wrangler secret put GEMINI_API_KEY      # aistudio.google.com (no billing!)
    npx wrangler secret put OPENROUTER_API_KEY  # openrouter.ai
    ```
