@@ -459,3 +459,15 @@ tr + tr td { border-top: 1px solid var(--line); }
 .quick-chip { flex-shrink: 0; border: 1px solid var(--line); background: var(--glass); color: var(--text); border-radius: 999px; padding: 6px 12px; font-size: 13px; transition: border-color .15s, transform .15s; }
 .quick-chip:hover { border-color: var(--accent); }
 .quick-chip:active { transform: scale(.96); }
+
+/* ---------- Static pages (privacy) ---------- */
+.doc-page { overflow: auto; }
+.doc { max-width: 720px; margin: 0 auto; padding: 32px 20px 64px; }
+.doc-brand { display: inline-flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; font-weight: 700; font-size: 18px; margin-bottom: 24px; }
+.doc h1 { font-size: 30px; margin: 0 0 4px; }
+.doc h2 { font-size: 19px; margin: 28px 0 8px; }
+.doc ul { padding-inline-start: 22px; display: grid; gap: 6px; }
+.doc a { color: var(--accent); }
+.doc hr { border: 0; border-top: 1px solid var(--line); margin: 40px 0; }
+.doc-en { text-align: left; }
+.privacy-link { text-decoration: none; }
