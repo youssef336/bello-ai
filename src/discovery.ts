@@ -11,7 +11,7 @@ const DAY = 24 * 3600_000;
  */
 const MAX_TESTS_PER_RUN = 12;
 /** Slow "thinking" models get this long to answer the quick test. */
-const TEST_TIMEOUT_MS = 30_000;
+const TEST_TIMEOUT_MS = 60_000;
 /** Tests run in small parallel groups so a scan finishes in about a minute. */
 const TEST_CONCURRENCY = 4;
 /** A model missing from the catalog for longer than this is marked removed. */
