@@ -600,7 +600,6 @@ tr + tr td { border-top: 1px solid var(--line); }
 .model-left.out { color: var(--danger); }
 
 /* ---------- Notifications ---------- */
-.studio-link { display: inline-flex; width: auto; padding: 0 10px; gap: 6px; font-size: 13px; text-decoration: none; }
 .bell-wrap { position: relative; display: inline-flex; }
 .bell-wrap #bell { position: relative; }
 .bell-count {
@@ -620,8 +619,6 @@ tr + tr td { border-top: 1px solid var(--line); }
 .bell-list li.bell-empty { display: block; text-align: center; padding: 20px 8px; }
 .bell-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: start; unicode-bidi: plaintext; }
 @media (max-width: 520px) {
-  .studio-link span { display: none; }
-  .studio-link { width: 36px; padding: 0; justify-content: center; }
   .bell-wrap { position: static; }
   .bell-panel { position: fixed; top: 64px; inset-inline: 12px; width: auto; }
   #status-pill { padding: 5px 8px; }
