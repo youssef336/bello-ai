@@ -22,9 +22,9 @@ const clock = (ms) => new Date(ms).toLocaleTimeString('ar-EG-u-nu-latn', { hour:
 /** "بعد 3 ساعات" / "بعد 20 دقيقة" until a moment. */
 function untilText(ms) {
   const min = Math.max(1, Math.round((ms - Date.now()) / 60_000));
-  if (min < 60) return `بعد ${min} دقيقة`;
+  if (min < 60) return `بعد ${min} ${min >= 3 && min <= 10 ? 'دقايق' : 'دقيقة'}`;
   const h = Math.round(min / 60);
-  return h === 1 ? 'بعد ساعة' : h === 2 ? 'بعد ساعتين' : `بعد ${h} ساعات`;
+  return h === 1 ? 'بعد ساعة' : h === 2 ? 'بعد ساعتين' : `بعد ${h} ${h <= 10 ? 'ساعات' : 'ساعة'}`;
 }
 
 /** A server error as text; a daily limit also says when it comes back, like Claude and ChatGPT do. */
@@ -234,7 +234,8 @@ async function showApp(me) {
   $('login').hidden = true;
   $('app').hidden = false;
   renderMe();
-  await Promise.all([loadConversations(), loadModelPicker(), loadQuota()]);
+  await Promise.all([loadConversations(), loadModelPicker(), loadQuota(), loadBell()]);
+  watchBell();
   if (!matchMedia('(pointer: coarse)').matches) $('input').focus();
 }
 
@@ -562,7 +563,7 @@ function renderTray() {
 }
 
 /** Pictures go up as JPEG, at most 1280 px on the long side: small enough for every provider. */
-async function shrinkImage(source, max = 1280) {
+async function shrinkImage(source, max = 1280, startQuality = 0.82, maxChars = 1_300_000) {
   const bmp = await createImageBitmap(source);
   const scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
   const canvas = el('canvas', { width: Math.round(bmp.width * scale), height: Math.round(bmp.height * scale) });
@@ -570,9 +571,9 @@ async function shrinkImage(source, max = 1280) {
   g.fillStyle = '#fff';
   g.fillRect(0, 0, canvas.width, canvas.height);
   g.drawImage(bmp, 0, 0, canvas.width, canvas.height);
-  let quality = 0.82;
+  let quality = startQuality;
   let url = canvas.toDataURL('image/jpeg', quality);
-  while (url.length > 1_300_000 && quality > 0.4) {
+  while (url.length > maxChars && quality > 0.4) {
     quality -= 0.15;
     url = canvas.toDataURL('image/jpeg', quality);
   }
@@ -862,7 +863,8 @@ async function sendImage(text, images, { onRecent = false } = {}) {
   if (state.controller) return;
   await state.keepCompared?.();
   $('empty').hidden = true;
-  const shrink = (px) => Promise.all(images.map(async (a) => shrinkImage(await loadImage(a.data), px)));
+  // Fewer JPEG artefacts going in means fewer coming out; the limit is the server's (1,000,000).
+  const shrink = (px) => Promise.all(images.map(async (a) => shrinkImage(await loadImage(a.data), px, 0.92, 950_000)));
   let inputs = await shrink(EDIT_INPUT_PX);
   const first = images.length ? await loadImage(inputs[0]) : null;
   const aspect = first ? first.naturalWidth / first.naturalHeight : Number($('draw-size').value);
@@ -963,6 +965,26 @@ function renderQuota() {
     : `فاضل لك ${left} ${what} النهارده`;
 }
 
+/** One line over the composer: what is left on the model that just answered. */
+function renderRemaining(r) {
+  const node = $('model-left');
+  const number = (n) => n.toLocaleString('en-US');
+  const out = r.left === 0;
+  const low = r.left !== null && !out && (r.left <= 10 || (r.limit !== null && r.left / r.limit <= 0.1));
+  const parts = [];
+  if (r.fallback) parts.push('الموديل الأول ماردّش، فكمّلت على ده');
+  if (r.paid) parts.push('موديل مدفوع، من رصيدك');
+  else if (out) parts.push('خلص');
+  else if (r.left !== null) parts.push(`فاضل ${number(r.left)}${r.limit ? ` من ${number(r.limit)}` : ''} طلب النهارده`);
+  else parts.push(`المزود مش بيقول فاضل قد إيه · استخدامك النهارده ${number(r.used)}`);
+  if (r.shared) parts.push('مشترك بين موديلات OpenRouter المجانية');
+  if (r.resetAt) parts.push(`بيرجع كامل ${untilText(r.resetAt)}`);
+  node.classList.toggle('low', low);
+  node.classList.toggle('out', out);
+  node.replaceChildren(el('b', { dir: 'ltr' }, r.model), ` · ${parts.join(' · ')}`);
+  node.hidden = false;
+}
+
 /** Shared by both modes: a new conversation's id and, later, its generated title. */
 function conversationEvent(event, data, firstText) {
   if (event === 'conversation') {
@@ -1034,6 +1056,8 @@ async function send(text, { regenerate = false, attachments = [] } = {}) {
           answer.notice = data.message;
         } else if (event === 'sources') {
           answer.sources = data.sources;
+        } else if (event === 'remaining') {
+          renderRemaining(data);
         } else if (event === 'done') {
           answer.id = data.messageId;
           navigator.vibrate?.(12);
@@ -1801,6 +1825,75 @@ for (const b of document.querySelectorAll('#font-size button')) {
   });
 }
 applyAppearance();
+
+// --- Notifications -------------------------------------------------------------------------
+
+const BELL_EVERY_MS = 5 * 60_000;
+const bell = { items: [], resting: [], timer: 0 };
+
+const seenRests = () => new Set(pref.get('bello-bell-rests', '').split('|').filter(Boolean));
+
+async function loadBell() {
+  try {
+    Object.assign(bell, await api('/api/notifications'));
+  } catch {
+    return; // A nicety: the next check tries again.
+  }
+  // A device's first visit starts clean instead of showing a month of history as new.
+  if (!pref.get('bello-bell-seen', '')) pref.set('bello-bell-seen', String(Date.now()));
+  renderBell();
+}
+
+function bellRow(fresh, label, tone, name, detail) {
+  return el('li', { class: fresh ? 'fresh' : '' },
+    el('span', { class: `badge kind ${tone}` }, label),
+    el('span', { class: 'bell-name', dir: 'ltr' }, name),
+    el('span', { class: 'muted small' }, detail),
+  );
+}
+
+function renderBell() {
+  const seenAt = Number(pref.get('bello-bell-seen', '0'));
+  const rests = seenRests();
+  const rows = [
+    ...bell.resting.map((r) => bellRow(!rests.has(r.key), 'خلص', 'warn', r.name, `${r.provider} · بيرجع ${untilText(r.until)}`)),
+    ...bell.items.map((i) => {
+      const [label, tone] = KIND[i.kind];
+      return bellRow(i.at > seenAt, label, tone, i.name, `${i.provider} · ${ago(i.at)}`);
+    }),
+  ];
+  $('bell-list').replaceChildren(...(rows.length ? rows : [el('li', { class: 'muted small bell-empty' }, 'مفيش إشعارات لسه.')]));
+  const unread = $('bell-list').querySelectorAll('.fresh').length;
+  $('bell-count').hidden = !unread;
+  $('bell-count').textContent = unread > 9 ? '9+' : String(unread);
+  $('bell').setAttribute('aria-label', unread ? `الإشعارات، ${unread} جديد` : 'الإشعارات');
+}
+
+function openBell(open) {
+  $('bell-panel').hidden = !open;
+  $('bell').setAttribute('aria-expanded', String(open));
+  if (!open) return;
+  renderBell(); // Keeps the new rows marked for as long as the panel stays open.
+  pref.set('bello-bell-seen', String(Math.max(Number(pref.get('bello-bell-seen', '0')), ...bell.items.map((i) => i.at))));
+  pref.set('bello-bell-rests', bell.resting.map((r) => r.key).join('|'));
+  $('bell-count').hidden = true;
+}
+
+/** Checks every few minutes and whenever the tab comes back; hidden tabs do not poll. */
+function watchBell() {
+  if (bell.timer) return;
+  bell.timer = setInterval(() => { if (!document.hidden) loadBell(); }, BELL_EVERY_MS);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) loadBell(); });
+}
+
+$('bell').addEventListener('click', () => openBell($('bell-panel').hidden));
+$('bell-panel').addEventListener('click', (e) => { if (e.target.closest('[data-go]')) openBell(false); });
+document.addEventListener('click', (e) => {
+  if (!$('bell-panel').hidden && !e.target.closest('.bell-wrap')) openBell(false);
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('bell-panel').hidden) openBell(false);
+});
 
 // --- Boot ----------------------------------------------------------------------------------
 

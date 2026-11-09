@@ -1,4 +1,5 @@
 import type { ApiMessage } from './attachments';
+import { rateLimitHeaders } from './remaining';
 
 /**
  * Answers built from a live web search, through Groq's built-in `browser_search` tool on the
@@ -66,6 +67,6 @@ export async function callSearch(key: string, model: string, messages: ApiMessag
   const sources = sourcesOf(message?.executed_tools ?? []);
   const events = [{ choices: [{ delta: { content: text } }] }, ...(sources.length ? [{ sources }] : [])];
   return new Response(`${events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('')}data: [DONE]\n\n`, {
-    headers: { 'content-type': 'text/event-stream' },
+    headers: { 'content-type': 'text/event-stream', ...rateLimitHeaders(res.headers) },
   });
 }

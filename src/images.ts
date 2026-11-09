@@ -3,7 +3,7 @@ import type { User } from './auth';
 import { type Env, error, json, newId, now } from './env';
 import { keysFor } from './keys';
 import { detectLanguage } from './lang';
-import { allocationUsed, consume, limitReached, refund } from './limits';
+import { allocationUsed, consume, limitReached, refund, takeBestEdit } from './limits';
 import type { ModelRow } from './router';
 import { askQuick } from './titles';
 
@@ -14,13 +14,22 @@ import { askQuick } from './titles';
  *
  * - FLUX.2 [klein] 4B draws and edits: up to 4 pictures go in as input_image_0..3, and the prompt
  *   can refer to them ("put the dog from image 1 next to the woman in image 0").
+ * - FLUX.2 [klein] 9B edits first for the owner, a few times a day (config/limits.ts): side by
+ *   side on the same photo it keeps the face, clothes and background that 4B repaints, in the
+ *   same time, but costs about 1,550 neurons instead of 125.
  * - FLUX.1 [schnell] is the backup for plain drawing.
- * Prices: developers.cloudflare.com/workers-ai/platform/pricing (checked 2026-11-01).
+ * No better free option exists: every image model on Gemini and OpenRouter is paid.
+ * Prices: developers.cloudflare.com/workers-ai/platform/pricing (checked 2026-11-09).
  */
 
 const KLEIN = '@cf/black-forest-labs/flux-2-klein-4b';
+const KLEIN_9B = '@cf/black-forest-labs/flux-2-klein-9b';
 const SCHNELL = '@cf/black-forest-labs/flux-1-schnell';
-export const IMAGE_MODEL_NAMES: Record<string, string> = { [KLEIN]: 'FLUX.2 klein', [SCHNELL]: 'FLUX.1 schnell' };
+export const IMAGE_MODEL_NAMES: Record<string, string> = {
+  [KLEIN]: 'FLUX.2 klein',
+  [KLEIN_9B]: 'FLUX.2 klein 9B',
+  [SCHNELL]: 'FLUX.1 schnell',
+};
 
 const MAX_INPUTS = 4;
 const MAX_INPUT_CHARS = 1_000_000;
@@ -99,7 +108,7 @@ class DailyAllocationUsed extends Error {}
 /** The docs ask for input pictures under 512 px; larger ones work today and keep more detail. */
 class InputTooLarge extends Error {}
 
-async function runKlein(env: Env, prompt: string, inputs: Blob[], size: { width: number; height: number }) {
+async function runKlein(env: Env, model: string, prompt: string, inputs: Blob[], size: { width: number; height: number }) {
   const form = new FormData();
   form.append('prompt', prompt);
   form.append('width', String(size.width));
@@ -107,7 +116,7 @@ async function runKlein(env: Env, prompt: string, inputs: Blob[], size: { width:
   inputs.forEach((picture, i) => form.append(`input_image_${i}`, picture));
   // FormData has no serialised body or boundary of its own: a Response makes both.
   const body = new Response(form);
-  return env.AI!.run(KLEIN as never, {
+  return env.AI!.run(model as never, {
     multipart: { body: body.body, contentType: body.headers.get('content-type') },
   } as never) as Promise<{ image?: string }>;
 }
@@ -116,21 +125,29 @@ async function runSchnell(env: Env, prompt: string) {
   return env.AI!.run(SCHNELL as never, { prompt, steps: 6 } as never) as Promise<{ image?: string }>;
 }
 
-/** Base64 JPEG of the picture, trying the backup model when the first one fails. */
-async function draw(env: Env, prompt: string, inputs: Blob[], aspect: number): Promise<{ image: string; model: string }> {
-  const attempts: [string, () => Promise<{ image?: string }>][] = [[KLEIN, () => runKlein(env, prompt, inputs, sizeFor(aspect))]];
-  // schnell cannot see pictures, so it only stands in for plain drawing.
-  if (!inputs.length) attempts.push([SCHNELL, () => runSchnell(env, prompt)]);
+/**
+ * The models to try, best first. schnell cannot see pictures, so it only backs up plain drawing.
+ * 9B is listed twice: measured 2026-11-09, about one call in four answers "3043: Internal server
+ * error" within a second, and the next call usually works.
+ */
+export function modelsFor(editing: boolean, best: boolean): string[] {
+  if (!editing) return [KLEIN, SCHNELL];
+  return best ? [KLEIN_9B, KLEIN_9B, KLEIN] : [KLEIN];
+}
+
+/** Base64 JPEG of the picture, trying the next model when one fails. */
+async function draw(env: Env, prompt: string, inputs: Blob[], aspect: number, best: boolean): Promise<{ image: string; model: string }> {
   let last: unknown = null;
-  for (const [model, run] of attempts) {
+  for (const model of modelsFor(inputs.length > 0, best)) {
     try {
-      const out = await run();
+      const out = await (model === SCHNELL ? runSchnell(env, prompt) : runKlein(env, model, prompt, inputs, sizeFor(aspect)));
       if (out.image) return { image: out.image, model };
       last = new Error('no image in the answer');
     } catch (e) {
       const message = String(e instanceof Error ? e.message : e);
       if (/4006|daily free allocation|neurons/i.test(message)) throw new DailyAllocationUsed(message);
-      if (inputs.length && /512|too large|dimension|resolution|image size/i.test(message)) throw new InputTooLarge(message);
+      // Only the last model's complaint sends the picture back smaller; 9B falls through to 4B first.
+      if (inputs.length && model === KLEIN && /512|too large|dimension|resolution|image size/i.test(message)) throw new InputTooLarge(message);
       console.error('image', model, message);
       last = e;
     }
@@ -155,17 +172,21 @@ export async function makeImage(env: Env, user: User, req: ImageRequest): Promis
   if (!(await consume(env, user, 'images'))) return limitReached('images');
 
   const editing = req.images.length > 0;
+  const best = editing && (await takeBestEdit(env, user));
   let result: { image: string; model: string };
   let prompt = req.prompt;
   try {
     prompt = await englishPrompt(env, user, req.prompt, editing);
-    result = await draw(env, prompt, req.images.map(pictureOf), req.aspect);
+    result = await draw(env, prompt, req.images.map(pictureOf), req.aspect, best);
   } catch (e) {
     await refund(env, user, 'images');
+    if (best) await refund(env, user, 'best_edits');
     if (e instanceof DailyAllocationUsed) return allocationUsed();
     if (e instanceof InputTooLarge) return json({ error: 'الصورة كبيرة على الموديل', smaller: true }, 413);
     return error(502, 'ماعرفتش أعمل الصورة دي. جرّب توصفها بشكل تاني، أو استنى دقيقة.');
   }
+  // The strong model failed and the ordinary one answered: today's strong edit was not spent.
+  if (best && result.model !== KLEIN_9B) await refund(env, user, 'best_edits');
 
   if (!conversationId) {
     isNew = true;

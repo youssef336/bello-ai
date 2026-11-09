@@ -1,4 +1,4 @@
-import { DAILY_LIMITS } from '../config/limits';
+import { BEST_EDITS_PER_DAY, DAILY_LIMITS } from '../config/limits';
 import type { User } from './auth';
 import { type Env, error, json, now, today } from './env';
 
@@ -74,9 +74,22 @@ export async function consume(env: Env, user: User, kind: Kind, amount = 1): Pro
 }
 
 /** Give back what a request took when it produced nothing. */
-export async function refund(env: Env, user: User, kind: Kind, amount = 1): Promise<void> {
+export async function refund(env: Env, user: User, kind: Kind | 'best_edits', amount = 1): Promise<void> {
   await env.DB.prepare('UPDATE daily_use SET used = MAX(0, used - ?) WHERE day = ? AND user_id = ? AND kind = ?')
     .bind(amount, today(), user.id, kind).run();
+}
+
+/**
+ * One of today's edits on the stronger picture model. The owner's only: one costs about twelve
+ * ordinary ones, out of the allocation everybody shares. false = use the ordinary model.
+ */
+export async function takeBestEdit(env: Env, user: User): Promise<boolean> {
+  if (user.role !== 'owner' || BEST_EDITS_PER_DAY <= 0) return false;
+  const res = await env.DB.prepare(
+    `INSERT INTO daily_use (day, user_id, kind, used) VALUES (?1, ?2, 'best_edits', 1)
+     ON CONFLICT (day, user_id, kind) DO UPDATE SET used = used + 1 WHERE used < ?3`,
+  ).bind(today(), user.id, BEST_EDITS_PER_DAY).run();
+  return res.meta.changes > 0;
 }
 
 const NAMES: Record<Kind, string> = { messages: 'الرسايل', images: 'الصور', video: 'دقايق ترجمة الفيديو' };

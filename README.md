@@ -37,7 +37,9 @@ hits its limit, and **adds new free models by itself** as soon as a provider pub
 - **Draw and edit pictures** (🎨): describe a picture, or attach up to 4 and say what to change
   ("خلّي الخلفية بحر", "put the dog from image 1 next to her"). Runs on Cloudflare Workers AI's free
   allocation: FLUX.2 [klein] draws and edits (≈ 130 neurons a picture), FLUX.1 [schnell] is the
-  backup. Arabic requests are rewritten as an English prompt by a fast free model first. Every
+  backup. The owner's first edits of the day (4 by default, [`config/limits.ts`](config/limits.ts))
+  run on the stronger FLUX.2 [klein] 9B (≈ 1,550 neurons), which keeps faces, clothes and
+  backgrounds that the smaller model repaints. Arabic requests are rewritten as an English prompt by a fast free model first. Every
   drawn picture has **download**, **edit this** and one-tap edits (remove background, enhance,
   cartoon, black & white, night) under it.
   No button needed, like ChatGPT: send a photo with "شيل الخلفية" / "make it a cartoon" and it is
@@ -55,6 +57,12 @@ hits its limit, and **adds new free models by itself** as soon as a provider pub
   (00:00 UTC, when Cloudflare refills its free allocation). Defaults in
   [`config/limits.ts`](config/limits.ts); the owner changes anyone's from **الأعضاء → الحدود**.
   A message nothing answered, or a picture that failed, does not count.
+- **Notifications** (🔔): new free models, models the provider dropped, and models whose limit you
+  have used up, with when each comes back.
+- **What is left, while you work**: a line over the box shows the model that just answered and how
+  much is left on it: Groq's own daily count for that model, OpenRouter's daily count shared by its
+  free models. Gemini and Workers AI do not report a number, so the line says so and shows how many
+  times you used the model today. Numbers are never guessed.
 - **Auto titles**: a fast model names each new conversation while the answer streams.
 - **Memory**: notes about you; pinned ones always go in, the rest only when they match the message.
 - **Friends, without sharing your limits**: invite emails; they sign in with Google and add their
@@ -159,7 +167,7 @@ Then **الأعضاء → ادعي** an email; that person opens the site and si
 | CPU per request | 10 ms | fine: the Worker mostly waits on the network |
 | Subrequests | 50 / invocation | ≤ 12 model tests per scan, ≤ 4 tries per message |
 | Cron triggers | 5 / account | uses 1 |
-| Workers AI | 10,000 neurons / day | ≈ 75 pictures, or ≈ 200 minutes of subtitles, shared by everyone; then it fails until 00:00 UTC, never bills |
+| Workers AI | 10,000 neurons / day | ≈ 75 pictures, or ≈ 200 minutes of subtitles, shared by everyone (the owner's 4 strong edits take ≈ 6,200 of it); then it fails until 00:00 UTC, never bills |
 | D1 | 5 GB, 5M rows read and 100k written / day | years of chat history |
 
 Checked against developers.cloudflare.com on 2026-11-01. Free plans change; re-check now and then.

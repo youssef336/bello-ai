@@ -15,6 +15,7 @@ import { classifyTask, detectLanguage } from './lang';
 import { refund } from './limits';
 import { estimateCost, paidAllowedNow } from './paid';
 import { callProvider, providerById } from './providers';
+import { remainingFor } from './remaining';
 import { cooldownMs, type ModelRow, rankModels, type RouteRequest } from './router';
 import { callSearch, SEARCH_MODELS, type Source, wantsWeb } from './search';
 import { makeTitle } from './titles';
@@ -216,7 +217,7 @@ function noModelsMessage(p: Prepared): string {
 
 const seesImages = (m: ModelRow): boolean => Boolean(m.supports_vision) && m.provider !== 'workers-ai';
 
-type Success = { ok: true; text: string; latency: number; broken: boolean; sources: Source[] };
+type Success = { ok: true; text: string; latency: number; broken: boolean; sources: Source[]; headers: Headers };
 type Outcome = Success | { ok: false };
 
 /**
@@ -293,7 +294,7 @@ async function streamModel(
     if (!text) return fail(0, String(e));
   }
   if (!text) return fail(0, 'empty answer');
-  return { ok: true, text, latency: firstTokenMs ?? now() - started, broken, sources };
+  return { ok: true, text, latency: firstTokenMs ?? now() - started, broken, sources, headers: res.headers };
 }
 
 /** A model answered: clear its rest, learn its speed, count the use. */
@@ -469,6 +470,8 @@ async function answer(env: Env, ctx: ExecutionContext, user: User, input: ChatIn
 
       const assistantId = await saveAnswer(env, job.conversationId, m, o.text, o.sources);
       await recordSuccess(env, user, m, o, index > 0, p.promptChars);
+      const left = await remainingFor(env, user, m, p.keys.get(m.provider), o.headers).catch(() => null);
+      if (left) await send('remaining', { ...left, fallback: index > 0 });
       if (o.sources.length) await send('sources', { sources: o.sources });
       if (o.broken) await send('error', { message: 'The answer was cut off by the provider.' });
       await sendTitle();

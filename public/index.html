@@ -111,6 +111,19 @@
         <button id="delete-chat" class="icon-btn danger-btn" aria-label="امسح المحادثة" title="امسح المحادثة" hidden>
           <svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M5 7l1 13h12l1-13M9 7V4h6v3"/></svg>
         </button>
+        <a id="studio-link" class="icon-btn studio-link" href="https://studio.vibezo.net" target="_blank" rel="noopener noreferrer" title="ViBE ZO Studio" aria-label="ViBE ZO Studio" data-owner hidden>
+          <svg viewBox="0 0 24 24"><path d="m4 20 10-10M14 6l4 4M6 4v4M4 6h4M18 14v4M16 16h4"/></svg><span>Studio</span>
+        </a>
+        <div class="bell-wrap">
+          <button id="bell" class="icon-btn" aria-label="الإشعارات" title="الإشعارات" aria-expanded="false" aria-controls="bell-panel">
+            <svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 0 1 12 0c0 6 2.5 7.5 2.5 7.5h-17S6 15 6 9ZM10 20a2.2 2.2 0 0 0 4 0"/></svg>
+            <i id="bell-count" class="bell-count" hidden></i>
+          </button>
+          <div id="bell-panel" class="bell-panel glass" hidden>
+            <div class="bell-head"><b>الإشعارات</b><button class="link-btn small" data-go="activity">كل النشاط</button></div>
+            <ul id="bell-list" class="bell-list"></ul>
+          </div>
+        </div>
         <span id="status-pill" class="pill"><i class="dot"></i><span id="status-text">…</span></span>
       </header>
 
@@ -138,6 +151,7 @@
         <div class="composer-wrap">
           <div id="quick" class="quick" aria-label="اختصارات"></div>
           <p id="quota-note" class="quota-note" hidden></p>
+          <p id="model-left" class="model-left" hidden></p>
           <form id="composer" class="composer glass">
             <div id="tray" class="tray" hidden></div>
             <textarea id="input" rows="1" dir="auto" placeholder="اكتب رسالتك…"></textarea>

@@ -15,3 +15,10 @@ export const DAILY_LIMITS = {
   owner: { messages: null, images: 40, video: 30 },
   member: { messages: 150, images: 5, video: 5 },
 } as const satisfies Record<'owner' | 'member', Record<'messages' | 'images' | 'video', number | null>>;
+
+/**
+ * كام تعديل صورة في اليوم بيتعمل بالموديل الأقوى (FLUX.2 klein 9B)، للمالك بس. التعديل الواحد
+ * ≈ 1,550 neuron بدل ≈ 125، فالرقم ده بيحمي الرصيد اليومي (10,000). بعده التعديل بيكمل بالموديل
+ * العادي. 0 = مقفول.
+ */
+export const BEST_EDITS_PER_DAY = 4;

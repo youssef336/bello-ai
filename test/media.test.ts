@@ -1,14 +1,57 @@
 import { describe, expect, it } from 'vitest';
+import type { User } from '../src/auth';
+import type { Env } from '../src/env';
 import { DAILY_LIMITS } from '../config/limits';
 import { toApiMessages } from '../src/attachments';
-import { cleanPrompt, parseImageRequest, sizeFor } from '../src/images';
+import { cleanPrompt, makeImage, modelsFor, parseImageRequest, sizeFor } from '../src/images';
 import { effectiveLimit, nextReset } from '../src/limits';
+import { parseDuration, rateLimitFromHeaders, rateLimitHeaders } from '../src/remaining';
 import { wavSeconds } from '../src/transcribe';
 // The browser half of the video page: same WAV the server checks.
 // @ts-expect-error plain browser module without types
 import { plan, shortLines, wav } from '../public/video.js';
 
 const pic = 'data:image/jpeg;base64,/9j/AAAA';
+const KLEIN_4B = '@cf/black-forest-labs/flux-2-klein-4b';
+const KLEIN_9B = '@cf/black-forest-labs/flux-2-klein-9b';
+
+/** A database that accepts everything and remembers its statements, and a scripted Workers AI. */
+function fakeEnv(answers: Record<string, (string | null)[]>) {
+  const statements: { sql: string; args: unknown[] }[] = [];
+  const called: string[] = [];
+  const DB = {
+    prepare: (sql: string) => {
+      const statement = {
+        args: [] as unknown[],
+        bind(...args: unknown[]) {
+          statement.args = args;
+          statements.push({ sql, args });
+          return statement;
+        },
+        run: async () => ({ meta: { changes: 1 } }),
+        first: async () => null,
+        all: async () => ({ results: [] }),
+      };
+      return statement;
+    },
+    batch: async () => [],
+  };
+  const AI = {
+    run: async (model: string) => {
+      called.push(model);
+      const next = answers[model]?.shift();
+      if (next === undefined || next === null) throw new Error('3043: Internal server error');
+      return { image: next };
+    },
+  };
+  return { env: { DB, AI } as unknown as Env, statements, called };
+}
+
+const owner = { id: 'owner', role: 'owner' } as User;
+const member = { id: 'm1', role: 'member' } as User;
+const editOnce = (env: Env, user: User) => makeImage(env, user, { prompt: 'make it night', images: [pic], aspect: 1 });
+const usedStrong = (statements: { sql: string }[]) => statements.filter((s) => s.sql.includes("'best_edits', 1")).length;
+const gaveBackStrong = (statements: { args: unknown[] }[]) => statements.filter((s) => s.args.includes('best_edits')).length;
 
 describe('daily limits', () => {
   it('resets at the next 00:00 UTC', () => {
@@ -21,6 +64,75 @@ describe('daily limits', () => {
     expect(effectiveLimit('member', 0, 'messages')).toBe(0);
     expect(effectiveLimit('member', -1, 'messages')).toBeNull();
     expect(effectiveLimit('owner', null, 'messages')).toBe(DAILY_LIMITS.owner.messages);
+  });
+});
+
+describe('what is left on a model', () => {
+  it('reads the durations Groq sends', () => {
+    expect(parseDuration('2m59.56s')).toBe(179_560);
+    expect(parseDuration('7.66s')).toBe(7_660);
+    expect(parseDuration('1h2m')).toBe(3_720_000);
+    expect(parseDuration('250ms')).toBe(250);
+    expect(parseDuration('soon')).toBeNull();
+    expect(parseDuration(null)).toBeNull();
+  });
+  it('reads the daily allowance from the response', () => {
+    const headers = new Headers({
+      'x-ratelimit-limit-requests': '1000',
+      'x-ratelimit-remaining-requests': '984',
+      'x-ratelimit-reset-requests': '2m',
+    });
+    expect(rateLimitFromHeaders(headers, 1_000)).toEqual({ left: 984, limit: 1000, resetAt: 121_000 });
+  });
+  it('treats zero left as a number and missing headers as unknown', () => {
+    expect(rateLimitFromHeaders(new Headers({ 'x-ratelimit-remaining-requests': '0' }), 0)).toEqual({ left: 0, limit: null, resetAt: null });
+    expect(rateLimitFromHeaders(new Headers(), 0)).toBeNull();
+    expect(rateLimitFromHeaders(new Headers({ 'x-ratelimit-remaining-requests': '' }), 0)).toBeNull();
+  });
+  it('carries only the limit headers over to a rebuilt response', () => {
+    const headers = new Headers({ 'x-ratelimit-remaining-requests': '5', 'content-encoding': 'gzip' });
+    expect(rateLimitHeaders(headers)).toEqual({ 'x-ratelimit-remaining-requests': '5' });
+  });
+});
+
+describe('which picture model runs', () => {
+  it('tries the strong model first only when an edit has a slot today', () => {
+    expect(modelsFor(true, true)).toEqual([KLEIN_9B, KLEIN_9B, KLEIN_4B]);
+    expect(modelsFor(true, false)).toEqual([KLEIN_4B]);
+  });
+  it('never sends an edit to the model that cannot see pictures', () => {
+    expect(modelsFor(true, true).some((m) => m.includes('schnell'))).toBe(false);
+    expect(modelsFor(false, false).at(-1)).toContain('schnell');
+  });
+});
+
+describe('an edit from start to finish', () => {
+  it('runs the owner on the strong model and keeps the slot spent', async () => {
+    const { env, statements, called } = fakeEnv({ [KLEIN_9B]: ['/9j/NINE'] });
+    const out = await (await editOnce(env, owner)).json<{ message: { model_name: string } }>();
+    expect(out.message.model_name).toBe('FLUX.2 klein 9B');
+    expect(called).toEqual([KLEIN_9B]);
+    expect([usedStrong(statements), gaveBackStrong(statements)]).toEqual([1, 0]);
+  });
+  it('tries the strong model again after its quick failure', async () => {
+    const { env, statements, called } = fakeEnv({ [KLEIN_9B]: [null, '/9j/NINE'] });
+    const out = await (await editOnce(env, owner)).json<{ message: { model_name: string } }>();
+    expect(out.message.model_name).toBe('FLUX.2 klein 9B');
+    expect(called).toEqual([KLEIN_9B, KLEIN_9B]);
+    expect(gaveBackStrong(statements)).toBe(0);
+  });
+  it('falls back to the ordinary model and gives the slot back', async () => {
+    const { env, statements, called } = fakeEnv({ [KLEIN_9B]: [null, null], [KLEIN_4B]: ['/9j/FOUR'] });
+    const out = await (await editOnce(env, owner)).json<{ message: { model_name: string } }>();
+    expect(out.message.model_name).toBe('FLUX.2 klein');
+    expect(called).toEqual([KLEIN_9B, KLEIN_9B, KLEIN_4B]);
+    expect(gaveBackStrong(statements)).toBe(1);
+  });
+  it('never spends the strong model on a member', async () => {
+    const { env, statements, called } = fakeEnv({ [KLEIN_4B]: ['/9j/FOUR'] });
+    await editOnce(env, member);
+    expect(called).toEqual([KLEIN_4B]);
+    expect(usedStrong(statements)).toBe(0);
   });
 });
 

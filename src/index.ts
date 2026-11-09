@@ -27,6 +27,7 @@ import {
   paidSettings,
   setSettingStmt,
 } from './paid';
+import { notifications } from './notifications';
 import { configuredProviders } from './providers';
 import { transcribe } from './transcribe';
 
@@ -193,6 +194,8 @@ const routes: [string, RegExp, boolean, Handler][] = [
     const rows = await env.DB.prepare('SELECT * FROM events ORDER BY at DESC LIMIT 200').all();
     return json(rows.results);
   }],
+
+  ['GET', /^\/api\/notifications$/, ANYONE, async (_r, env, _c, user) => json(await notifications(env, user))],
 
   ['GET', /^\/api\/usage$/, ANYONE, async (_r, env, _c, user) => {
     const rows = await env.DB.prepare(
