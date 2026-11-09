@@ -70,7 +70,8 @@ const ago = (ms) => {
   if (s < 60) return 'دلوقتي';
   if (s < 3600) return `من ${Math.round(s / 60)} د`;
   if (s < 86400) return `من ${Math.round(s / 3600)} س`;
-  return new Date(ms).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'short' });
+  const d = new Date(ms);
+  return `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`;
 };
 
 // --- Dialog and toasts --------------------------------------------------------------------
